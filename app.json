@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "inventory-app",
+    "name": "ادارة المخزون",
     "slug": "inventory-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -20,6 +20,9 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-sqlite"
+    ]
   }
 }
