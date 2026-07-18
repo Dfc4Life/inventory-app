@@ -339,3 +339,113 @@ export async function getDashboardStats() {
     totalDebt: totalDebt?.s ?? 0,
   };
 }
+// =============================================================
+// التقارير — Reports
+// =============================================================
+
+export type SalesStats = {
+  today: number;
+  week: number;
+  allTime: number;
+  todayCount: number;
+};
+
+// ----- ملخص المبيعات (Sales totals) -----
+export async function getSalesStats(): Promise<SalesStats> {
+  const database = await getDatabase();
+  const today = await database.getFirstAsync<{ s: number }>(
+    `SELECT COALESCE(SUM(total), 0) as s FROM transactions
+     WHERE type = 'sale' AND date(created_at) = date('now')`
+  );
+  const todayCount = await database.getFirstAsync<{ c: number }>(
+    `SELECT COUNT(*) as c FROM transactions
+     WHERE type = 'sale' AND date(created_at) = date('now')`
+  );
+  const week = await database.getFirstAsync<{ s: number }>(
+    `SELECT COALESCE(SUM(total), 0) as s FROM transactions
+     WHERE type = 'sale' AND date(created_at) >= date('now', '-6 days')`
+  );
+  const allTime = await database.getFirstAsync<{ s: number }>(
+    `SELECT COALESCE(SUM(total), 0) as s FROM transactions WHERE type = 'sale'`
+  );
+  return {
+    today: today?.s ?? 0,
+    week: week?.s ?? 0,
+    allTime: allTime?.s ?? 0,
+    todayCount: todayCount?.c ?? 0,
+  };
+}
+
+export type DaySale = { day: string; total: number };
+
+// ----- مبيعات آخر 7 أيام (Daily sales for the last 7 days, oldest first) -----
+export async function getDailySales(): Promise<DaySale[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync<{ day: string; total: number }>(
+    `SELECT date(created_at) as day, COALESCE(SUM(total), 0) as total
+     FROM transactions
+     WHERE type = 'sale' AND date(created_at) >= date('now', '-6 days')
+     GROUP BY date(created_at)
+     ORDER BY day ASC`
+  );
+  const map = new Map(rows.map(r => [r.day, r.total]));
+  const result: DaySale[] = [];
+  const now = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(now.getDate() - i);
+    const dayStr = d.toISOString().slice(0, 10);
+    result.push({ day: dayStr, total: map.get(dayStr) ?? 0 });
+  }
+  return result;
+}
+
+export type TopProduct = {
+  id: number;
+  name: string;
+  category: string;
+  total_qty: number;
+  total_revenue: number;
+};
+
+// ----- أكثر المنتجات مبيعاً (Top selling products by quantity) -----
+export async function getTopProducts(limit: number = 5): Promise<TopProduct[]> {
+  const database = await getDatabase();
+  return database.getAllAsync<TopProduct>(
+    `SELECT p.id, p.name, p.category,
+            COALESCE(SUM(ti.quantity), 0) as total_qty,
+            COALESCE(SUM(ti.subtotal), 0) as total_revenue
+     FROM products p
+     LEFT JOIN transaction_items ti ON ti.product_id = p.id
+     LEFT JOIN transactions t ON ti.transaction_id = t.id AND t.type = 'sale'
+     GROUP BY p.id
+     HAVING total_qty > 0
+     ORDER BY total_qty DESC
+     LIMIT ?`,
+    limit
+  );
+}
+
+export type DebtSummary = {
+  totalDebt: number;
+  debtorsCount: number;
+  weekPayments: number;
+};
+
+// ----- ملخص الديون (Debt summary) -----
+export async function getDebtSummary(): Promise<DebtSummary> {
+  const database = await getDatabase();
+  const debt = await database.getFirstAsync<{ s: number; c: number }>(
+    `SELECT COALESCE(SUM(balance), 0) as s, COUNT(*) as c
+     FROM customers WHERE balance > 0`
+  );
+  const weekPay = await database.getFirstAsync<{ s: number }>(
+    `SELECT COALESCE(SUM(amount), 0) as s FROM payments
+     WHERE date(created_at) >= date('now', '-6 days')`
+  );
+  return {
+    totalDebt: debt?.s ?? 0,
+    debtorsCount: debt?.c ?? 0,
+    weekPayments: weekPay?.s ?? 0,
+  };
+}

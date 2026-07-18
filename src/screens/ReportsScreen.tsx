@@ -1,17 +1,142 @@
-import { View, Text, StyleSheet } from 'react-native';
-import { COLORS, SPACING } from '../theme';
+// src/screens/ReportsScreen.tsx
+// التقارير — real dashboard with charts and live data
+
+import { useState, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, RefreshControl } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
+import { COLORS, SPACING, formatIQD, formatNumber } from '../theme';
+import {
+  getSalesStats, getDailySales, getTopProducts, getDebtSummary,
+} from '../db/database';
+import type { SalesStats, DaySale, TopProduct, DebtSummary } from '../types';
 
 export default function ReportsScreen() {
+  const [stats, setStats] = useState<SalesStats | null>(null);
+  const [daily, setDaily] = useState<DaySale[]>([]);
+  const [top, setTop] = useState<TopProduct[]>([]);
+  const [debt, setDebt] = useState<DebtSummary | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = useCallback(async () => {
+    const [s, d, t, dbt] = await Promise.all([
+      getSalesStats(), getDailySales(), getTopProducts(5), getDebtSummary(),
+    ]);
+    setStats(s); setDaily(d); setTop(t); setDebt(dbt);
+  }, []);
+
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+  const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
+
+  const maxDaily = Math.max(1, ...daily.map(d => d.total));
+
+  const dayLabel = (dayStr: string): string => {
+    const days = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+    const d = new Date(dayStr + 'T00:00:00');
+    if (isNaN(d.getTime())) return '';
+    return days[d.getDay()];
+  };
+
+  const maxTop = Math.max(1, ...top.map(p => p.total_qty));
+
   return (
-    <View style={styles.container}>
+    <ScrollView
+      style={styles.container}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
+    >
       <View style={styles.header}>
         <Text style={styles.title}>التقارير</Text>
-        <Text style={styles.subtitle}>ملخص الأداء</Text>
+        <Text style={styles.subtitle}>ملخص الأداء — آخر 7 أيام</Text>
       </View>
-      <View style={styles.body}>
-        <Text style={styles.comingSoon}>📊 سنضيف التقارير والرسوم البيانية لاحقاً</Text>
+
+      <View style={styles.summaryGrid}>
+        <View style={[styles.summaryCard, { borderLeftColor: COLORS.line, borderLeftWidth: 1 }]}>
+          <Text style={[styles.summaryValue, { color: COLORS.green }]}>{stats ? formatIQD(stats.today) : '—'}</Text>
+          <Text style={styles.summaryLabel}>مبيعات اليوم</Text>
+          <Text style={styles.summarySub}>{stats?.todayCount ?? 0} عملية</Text>
+        </View>
+        <View style={styles.summaryCard}>
+          <Text style={[styles.summaryValue, { color: COLORS.blue, fontSize: 19 }]}>{stats ? formatIQD(stats.week) : '—'}</Text>
+          <Text style={styles.summaryLabel}>مبيعات الأسبوع</Text>
+          <Text style={styles.summarySub}>آخر 7 أيام</Text>
+        </View>
       </View>
-    </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>📈 مبيعات آخر 7 أيام</Text>
+        <View style={styles.chartRow}>
+          {daily.map((d, i) => {
+            const heightPct = (d.total / maxDaily) * 100;
+            return (
+              <View key={i} style={styles.barCol}>
+                <View style={styles.barTrack}>
+                  <View
+                    style={[
+                      styles.barFill,
+                      {
+                        height: `${Math.max(heightPct, d.total > 0 ? 6 : 0)}%`,
+                        backgroundColor: i === daily.length - 1 ? COLORS.primary : COLORS.green,
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.barLabel} numberOfLines={1}>{dayLabel(d.day)}</Text>
+              </View>
+            );
+          })}
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>🏆 أكثر المنتجات مبيعاً</Text>
+        {top.length === 0 ? (
+          <Text style={styles.emptyHint}>لا توجد مبيعات بعد</Text>
+        ) : (
+          top.map((p, i) => {
+            const pct = (p.total_qty / maxTop) * 100;
+            return (
+              <View key={p.id} style={styles.topRow}>
+                <Text style={styles.rank}>#{i + 1}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.topName} numberOfLines={1}>{p.name}</Text>
+                  <View style={styles.barTrackH}>
+                    <View style={[styles.barFillH, { width: `${pct}%`, backgroundColor: i === 0 ? COLORS.amber : COLORS.primary }]} />
+                  </View>
+                </View>
+                <View style={styles.topRight}>
+                  <Text style={styles.topQty}>{formatNumber(p.total_qty)}</Text>
+                  <Text style={styles.topRevenue}>{formatIQD(p.total_revenue)}</Text>
+                </View>
+              </View>
+            );
+          })
+        )}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>💰 ملخص الديون</Text>
+        <View style={styles.debtRow}>
+          <Text style={styles.debtLabel}>إجمالي الديون المستحقة</Text>
+          <Text style={[styles.debtValue, { color: COLORS.red }]}>{debt ? formatIQD(debt.totalDebt) : '—'}</Text>
+        </View>
+        <View style={[styles.debtRow, styles.debtRowBorder]}>
+          <Text style={styles.debtLabel}>عدد العملاء المدينين</Text>
+          <Text style={styles.debtValue}>{debt?.debtorsCount ?? 0}</Text>
+        </View>
+        <View style={[styles.debtRow, styles.debtRowBorder]}>
+          <Text style={styles.debtLabel}>تسديدات هذا الأسبوع</Text>
+          <Text style={[styles.debtValue, { color: COLORS.green }]}>{debt ? formatIQD(debt.weekPayments) : '—'}</Text>
+        </View>
+      </View>
+
+      <View style={styles.allTimeCard}>
+        <Ionicons name="trending-up" size={26} color="#ccfbf1" />
+        <Text style={styles.allTimeLabel}>إجمالي المبيعات (تراكمي)</Text>
+        <Text style={styles.allTimeValue}>{stats ? formatIQD(stats.allTime) : '—'}</Text>
+      </View>
+
+      <Text style={styles.footer}>📊 اسحب للأسفل لتحديث البيانات</Text>
+    </ScrollView>
   );
 }
 
@@ -20,6 +145,33 @@ const styles = StyleSheet.create({
   header: { backgroundColor: COLORS.primary, padding: SPACING.md + 4, paddingBottom: SPACING.lg },
   title: { color: '#fff', fontSize: 20, fontWeight: '800' },
   subtitle: { color: '#ccfbf1', fontSize: 13, marginTop: 2 },
-  body: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACING.lg },
-  comingSoon: { color: COLORS.muted, fontSize: 14, textAlign: 'center', lineHeight: 22 },
+  summaryGrid: { flexDirection: 'row' },
+  summaryCard: { width: '50%', padding: SPACING.md, backgroundColor: COLORS.card },
+  summaryValue: { fontSize: 17, fontWeight: '800' },
+  summaryLabel: { fontSize: 12, color: COLORS.muted, marginTop: 4 },
+  summarySub: { fontSize: 10, color: COLORS.muted, marginTop: 1 },
+  card: { backgroundColor: COLORS.card, margin: SPACING.md, marginBottom: 0, borderRadius: 16, padding: SPACING.md },
+  cardTitle: { fontSize: 15, fontWeight: '800', color: COLORS.text, marginBottom: SPACING.md },
+  chartRow: { flexDirection: 'row', height: 130, alignItems: 'flex-end' },
+  barCol: { flex: 1, alignItems: 'center', height: '100%', justifyContent: 'flex-end' },
+  barTrack: { width: 18, height: '80%', justifyContent: 'flex-end', marginRight: 4 },
+  barFill: { width: '100%', borderRadius: 6, minHeight: 2 },
+  barLabel: { fontSize: 9, color: COLORS.muted, marginTop: 6, fontWeight: '600' },
+  emptyHint: { color: COLORS.muted, fontSize: 13, textAlign: 'center', paddingVertical: 14 },
+  topRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 9, gap: 8 },
+  rank: { fontSize: 12, fontWeight: '800', color: COLORS.muted, width: 24 },
+  topName: { fontSize: 13, fontWeight: '700', color: COLORS.text, marginBottom: 5 },
+  barTrackH: { height: 8, backgroundColor: COLORS.line, borderRadius: 999, overflow: 'hidden' },
+  barFillH: { height: '100%', borderRadius: 999 },
+  topRight: { alignItems: 'flex-end', minWidth: 70 },
+  topQty: { fontSize: 13, fontWeight: '800', color: COLORS.text },
+  topRevenue: { fontSize: 10, color: COLORS.muted, marginTop: 1 },
+  debtRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 },
+  debtRowBorder: { borderTopWidth: 1, borderTopColor: COLORS.line },
+  debtLabel: { fontSize: 13, color: COLORS.muted },
+  debtValue: { fontSize: 14, fontWeight: '800', color: COLORS.text },
+  allTimeCard: { backgroundColor: COLORS.primaryDark, margin: SPACING.md, marginBottom: 0, borderRadius: 16, padding: SPACING.lg, alignItems: 'center' },
+  allTimeLabel: { color: '#ccfbf1', fontSize: 13, marginTop: 6 },
+  allTimeValue: { color: '#fff', fontSize: 24, fontWeight: '800', marginTop: 4 },
+  footer: { textAlign: 'center', color: COLORS.muted, fontSize: 11, marginTop: SPACING.lg, marginBottom: SPACING.lg },
 });

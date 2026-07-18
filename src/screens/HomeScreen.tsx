@@ -1,14 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl } from 'react-native';
 import { COLORS, SPACING, formatIQD } from '../theme';
-import { getDashboardStats } from '../db/database';
+import { getDashboardStats, getSalesStats } from '../db/database';
 import { useFocusEffect } from '@react-navigation/native';
 
 
 export default function HomeScreen() {
   const [stats, setStats] = useState({ productCount: 0, lowStock: 0, totalDebt: 0 });
+  const [todaySales, setTodaySales] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
-  const load = useCallback(async () => { setStats(await getDashboardStats()); }, []);
+const load = useCallback(async () => {
+  const [s, sales] = await Promise.all([getDashboardStats(), getSalesStats()]);
+  setStats(s);
+  setTodaySales(sales.today);
+}, []);
   useFocusEffect(useCallback(() => { load(); }, [load]));
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
 
@@ -33,7 +38,7 @@ export default function HomeScreen() {
           <Text style={styles.cardLabel}>إجمالي ديون العملاء</Text>
         </View>
         <View style={styles.card}>
-          <Text style={[styles.bigNum, { color: COLORS.blue }]}>—</Text>
+        <Text style={[styles.bigNum, { color: COLORS.blue, fontSize: 20 }]}>{formatIQD(todaySales)}</Text>
           <Text style={styles.cardLabel}>مبيعات اليوم</Text>
         </View>
       </View>

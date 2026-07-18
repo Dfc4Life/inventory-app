@@ -44,3 +44,27 @@ export type ActivityEntry = {
   amount: number;
   created_at: string;
 };
+// ===== التقارير — Reports types =====
+
+export type SalesStats = {
+  today: number;
+  week: number;
+  allTime: number;
+  todayCount: number;
+};
+
+export type DaySale = { day: string; total: number };
+
+export type TopProduct = {
+  id: number;
+  name: string;
+  category: string;
+  total_qty: number;
+  total_revenue: number;
+};
+
+export type DebtSummary = {
+  totalDebt: number;
+  debtorsCount: number;
+  weekPayments: number;
+};
