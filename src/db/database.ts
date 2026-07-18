@@ -213,7 +213,88 @@ export async function recordPayment(
     );
   });
 }
+// ----- تسجيل عملية شراء / إدخال بضاعة (Record a purchase / stock-in) -----
+// تضيف للمخزون (IN) وتسجّل العملية. لا تتعامل مع ديون الموردين (ميزة مستقبلية)
+export async function recordPurchase(
+  userId: number,
+  items: { product_id: number; quantity: number; unit_price: number }[],
+  note: string = ''
+): Promise<number> {
+  const database = await getDatabase();
+  const total = items.reduce((sum, it) => sum + it.quantity * it.unit_price, 0);
 
+  await database.withTransactionAsync(async () => {
+    const txResult = await database.runAsync(
+      `INSERT INTO transactions (type, customer_id, user_id, total, payment_method, note)
+       VALUES ('purchase', NULL, ?, ?, 'cash', ?)`,
+      userId, total, note
+    );
+    const txId = txResult.lastInsertRowId as number;
+
+    for (const it of items) {
+      await database.runAsync(
+        `INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, subtotal)
+         VALUES (?, ?, ?, ?, ?)`,
+        txId, it.product_id, it.quantity, it.unit_price, it.quantity * it.unit_price
+      );
+      await database.runAsync(
+        `UPDATE products SET current_stock = current_stock + ? WHERE id = ?`,
+        it.quantity, it.product_id
+      );
+      await database.runAsync(
+        `INSERT INTO stock_movements (product_id, type, quantity, reason, transaction_id, user_id)
+         VALUES (?, 'in', ?, 'شراء', ?, ?)`,
+        it.product_id, it.quantity, txId, userId
+      );
+    }
+  });
+
+  const last = await database.getFirstAsync<{ id: number }>(
+    `SELECT id FROM transactions ORDER BY id DESC LIMIT 1`
+  );
+  return last?.id ?? 0;
+}
+
+// ----- تسجيل تحويل داخلي (Record an internal transfer / non-sale stock-out) -----
+// يخصم من المخزون (OUT) بدون مبلغ، ويتطلب سبباً
+export async function recordTransfer(
+  userId: number,
+  items: { product_id: number; quantity: number }[],
+  reason: string
+): Promise<number> {
+  const database = await getDatabase();
+
+  await database.withTransactionAsync(async () => {
+    const txResult = await database.runAsync(
+      `INSERT INTO transactions (type, customer_id, user_id, total, payment_method, note)
+       VALUES ('transfer', NULL, ?, 0, 'cash', ?)`,
+      userId, reason
+    );
+    const txId = txResult.lastInsertRowId as number;
+
+    for (const it of items) {
+      await database.runAsync(
+        `INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, subtotal)
+         VALUES (?, ?, ?, 0, 0)`,
+        txId, it.product_id, it.quantity
+      );
+      await database.runAsync(
+        `UPDATE products SET current_stock = current_stock - ? WHERE id = ?`,
+        it.quantity, it.product_id
+      );
+      await database.runAsync(
+        `INSERT INTO stock_movements (product_id, type, quantity, reason, transaction_id, user_id)
+         VALUES (?, 'out', ?, ?, ?, ?)`,
+        it.product_id, it.quantity, reason || 'تحويل', txId, userId
+      );
+    }
+  });
+
+  const last = await database.getFirstAsync<{ id: number }>(
+    `SELECT id FROM transactions ORDER BY id DESC LIMIT 1`
+  );
+  return last?.id ?? 0;
+}
 // ----- جلب منتج واحد (Get a single product by id) -----
 export async function getProductById(id: number): Promise<Product | null> {
   const database = await getDatabase();
