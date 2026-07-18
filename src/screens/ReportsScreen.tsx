@@ -42,7 +42,7 @@ export default function ReportsScreen() {
         Alert.alert('✅ تم', 'تم إنشاء النسخة الاحتياطية');
       }
     } catch (e) {
-      Alert.alert('خطأ', 'تعذّر التصدير. حاول مرة أخرى.');
+      Alert.alert('خطأ في التصدير', e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
     }

@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "ادارة المخزون",
+    "name": "إدارة المخزون",
     "slug": "inventory-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -10,12 +10,7 @@
       "supportsTablet": true
     },
     "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#383d43",
-        "foregroundImage": "./assets/icon",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      },
+      "package": "com.dfc4life.inventoryapp",
       "predictiveBackGestureEnabled": false
     },
     "web": {
@@ -23,6 +18,11 @@
     },
     "plugins": [
       "expo-sqlite"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "c5c7878d-5f9b-46b8-be85-3f4efe725b22"
+      }
+    }
   }
 }

@@ -6,7 +6,7 @@ import { View, Text, StyleSheet, FlatList, RefreshControl, Pressable, Modal, Tex
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, formatIQD, formatDate } from '../theme';
-import { getCustomers, getCustomerById, getCustomerActivity, addCustomer, recordPayment, getUsers } from '../db/database';
+import { getCustomers, getCustomerById, getCustomerActivity, addCustomer, recordPayment, getUsers, deleteCustomer } from '../db/database';
 import type { Customer, ActivityEntry } from '../types';
 
 export default function CustomersScreen() {
@@ -84,6 +84,35 @@ export default function CustomersScreen() {
       setPaying(false);
     }
   };
+  const handleDelete = () => {
+  if (!detail) return;
+  const hasDebt = detail.balance > 0;
+  const hasActivity = activity.length > 0;
+  const msg = hasDebt
+    ? `⚠️ هذا العميل عليه دين بمبلغ ${formatIQD(detail.balance)}.\n\nسيتم حذف العميل وسجل دفعاته نهائياً. سجلات المبيعات تبقى محفوظة في التقارير. هل أنت متأكد؟`
+    : hasActivity
+      ? 'سيتم حذف العميل وسجل دفعاته نهائياً. سجلات المبيعات تبقى محفوظة في التقارير. هل أنت متأكد؟'
+      : 'هل أنت متأكد من حذف هذا العميل؟';
+  Alert.alert(
+    'حذف العميل',
+    msg,
+    [
+      { text: 'إلغاء', style: 'cancel' },
+      {
+        text: 'حذف', style: 'destructive', onPress: async () => {
+          try {
+            await deleteCustomer(detail.id);
+            setShowDetail(false);
+            await load();
+            Alert.alert('✅ تم', 'تم حذف العميل');
+          } catch (e) {
+            Alert.alert('خطأ', 'تعذّر الحذف. حاول مرة أخرى.');
+          }
+        },
+      },
+    ],
+  );
+};
 
   const renderItem = ({ item }: { item: Customer }) => {
     const inDebt = item.balance > 0;
@@ -202,6 +231,10 @@ export default function CustomersScreen() {
                   </View>
                 ))
               )}
+              <Pressable style={styles.deleteBtn} onPress={handleDelete}>
+                <Ionicons name="trash-outline" size={18} color={COLORS.red} />
+                    <Text style={styles.deleteBtnText}>حذف العميل</Text>
+                </Pressable>
             </ScrollView>
           </View>
         </View>
@@ -250,4 +283,6 @@ const styles = StyleSheet.create({
   actLabel: { fontSize: 13, fontWeight: '600', color: COLORS.text },
   actDate: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
   actAmount: { fontSize: 13, fontWeight: '800' },
+  deleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 20, paddingVertical: 13, borderWidth: 1, borderColor: COLORS.red, borderRadius: 12, backgroundColor: 'rgba(239,68,68,0.06)' },
+deleteBtnText: { color: COLORS.red, fontWeight: '700', fontSize: 14 },
 });

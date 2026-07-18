@@ -539,14 +539,22 @@ export async function getDebtSummary(): Promise<DebtSummary> {
 // يعيد مسار الملف الجاهز للمشاركة — returns a file URI ready to share
 export async function exportDatabase(): Promise<string> {
   const database = await getDatabase();
-  await database.execAsync('PRAGMA wal_checkpoint(FULL)');
+  try {
+    await database.execAsync('PRAGMA wal_checkpoint(FULL)');
+  } catch (e) { /* قد يفشل، ليس قاتلاً */ }
   const dbPath = database.databasePath;
+  const sourceFile = new File(dbPath);
+  if (!sourceFile.exists) {
+    throw new Error('ملف قاعدة البيانات غير موجود: ' + dbPath);
+  }
   const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const backupName = `inventory-backup-${ts}.db`;
-  const sourceFile = new File(dbPath);
-  const backupFile = new File(Paths.document, backupName);
+  const backupFile = new File(Paths.cache, backupName);
   if (backupFile.exists) backupFile.delete();
   sourceFile.copy(backupFile);
+  if (!backupFile.exists) {
+    throw new Error('فشل إنشاء ملف النسخة الاحتياطية');
+  }
   return backupFile.uri;
 }
 
@@ -565,4 +573,15 @@ export async function importDatabase(sourceUri: string): Promise<void> {
     if (f.exists) f.delete();
   }
   await getDatabase();
+}
+// ----- حذف عميل (Delete a customer) -----
+// نحتفظ بسجلات المبيعات (للإبلاغ المالي) لكن نفصلها عن العميل المحذوف
+// ونحذف سجل دفعات ذلك العميل
+export async function deleteCustomer(customerId: number): Promise<void> {
+  const database = await getDatabase();
+  await database.withTransactionAsync(async () => {
+    await database.runAsync(`DELETE FROM payments WHERE customer_id = ?`, customerId);
+    await database.runAsync(`UPDATE transactions SET customer_id = NULL WHERE customer_id = ?`, customerId);
+    await database.runAsync(`DELETE FROM customers WHERE id = ?`, customerId);
+  });
 }
