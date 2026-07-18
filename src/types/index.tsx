@@ -37,3 +37,10 @@ export interface Payment {
   id: number; customer_id: number; amount: number; user_id: number;
   note: string; created_at: string;
 }
+// عنصر في سجل نشاط العميل (مبيعة آجلة أو دفعة سداد)
+export type ActivityEntry = {
+  key: string;
+  kind: 'sale' | 'payment';
+  amount: number;
+  created_at: string;
+};

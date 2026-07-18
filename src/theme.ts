@@ -13,3 +13,14 @@ export function formatIQD(amount: number): string {
 export function formatNumber(n: number): string {
   return Math.round(n).toLocaleString('en-US');
 }
+// تنسيق التاريخ من صيغة SQLite — format SQLite datetime to a friendly display
+export function formatDate(dateStr: string): string {
+  if (!dateStr) return '';
+  const d = new Date(dateStr.replace(' ', 'T') + 'Z');
+  if (isNaN(d.getTime())) return dateStr;
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${dd}/${mm} • ${hh}:${min}`;
+}

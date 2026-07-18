@@ -221,6 +221,67 @@ export async function getStockMovements(productId: number): Promise<StockMovemen
     productId
   );
 }
+// ----- جلب عميل واحد (Get a single customer by id) -----
+export async function getCustomerById(id: number): Promise<Customer | null> {
+  const database = await getDatabase();
+  return database.getFirstAsync<Customer>(
+    `SELECT * FROM customers WHERE id = ?`, id
+  );
+}
+
+// ----- نشاط العميل: المبيعات الآجلة + الدفعات (Customer activity feed) -----
+export type ActivityEntry = {
+  key: string;
+  kind: 'sale' | 'payment';
+  amount: number;
+  created_at: string;
+};
+
+export async function getCustomerActivity(customerId: number): Promise<ActivityEntry[]> {
+  const database = await getDatabase();
+  const sales = await database.getAllAsync<{ id: number; total: number; created_at: string }>(
+    `SELECT id, total, created_at FROM transactions
+     WHERE customer_id = ? AND type = 'sale' AND payment_method = 'credit'
+     ORDER BY created_at DESC`,
+    customerId
+  );
+  const payments = await database.getAllAsync<{ id: number; amount: number; created_at: string }>(
+    `SELECT id, amount, created_at FROM payments
+     WHERE customer_id = ?
+     ORDER BY created_at DESC`,
+    customerId
+  );
+
+  const activity: ActivityEntry[] = [
+    ...sales.map(s => ({ key: 'sale-' + s.id, kind: 'sale' as const, amount: s.total, created_at: s.created_at })),
+    ...payments.map(p => ({ key: 'pay-' + p.id, kind: 'payment' as const, amount: p.amount, created_at: p.created_at })),
+  ];
+
+  activity.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  return activity;
+}
+// ----- إضافة منتج جديد (Add a new product) -----
+export async function addProduct(
+  name: string, category: string, unitPrice: number,
+  openingStock: number, lowThreshold: number
+): Promise<number> {
+  const database = await getDatabase();
+  const result = await database.runAsync(
+    `INSERT INTO products (name, category, unit_price, current_stock, low_stock_threshold) VALUES (?, ?, ?, ?, ?)`,
+    name, category, unitPrice, openingStock, lowThreshold
+  );
+  return result.lastInsertRowId as number;
+}
+
+// ----- إضافة عميل جديد (Add a new customer) -----
+export async function addCustomer(name: string, phone: string): Promise<number> {
+  const database = await getDatabase();
+  const result = await database.runAsync(
+    `INSERT INTO customers (name, phone, balance) VALUES (?, ?, 0)`,
+    name, phone
+  );
+  return result.lastInsertRowId as number;
+}
 
 export async function getDashboardStats() {
   const database = await getDatabase();
