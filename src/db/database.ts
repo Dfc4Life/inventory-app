@@ -214,12 +214,51 @@ export async function recordPayment(
   });
 }
 
+// ----- جلب منتج واحد (Get a single product by id) -----
+export async function getProductById(id: number): Promise<Product | null> {
+  const database = await getDatabase();
+  return database.getFirstAsync<Product>(
+    `SELECT * FROM products WHERE id = ?`, id
+  );
+}
+
+// ----- سجل حركات مخزون منتج (Stock movement history for a product) -----
 export async function getStockMovements(productId: number): Promise<StockMovement[]> {
   const database = await getDatabase();
   return database.getAllAsync<StockMovement>(
     `SELECT * FROM stock_movements WHERE product_id = ? ORDER BY created_at DESC`,
     productId
   );
+}
+
+// ----- إعادة تخزين / تعديل يدوي (Restock or manual stock adjustment) -----
+// direction: 'in' (إضافة) أو 'out' (خصم/تالف)
+export async function adjustStock(
+  productId: number,
+  quantity: number,
+  direction: 'in' | 'out',
+  reason: string,
+  userId: number
+): Promise<void> {
+  const database = await getDatabase();
+  await database.withTransactionAsync(async () => {
+    if (direction === 'in') {
+      await database.runAsync(
+        `UPDATE products SET current_stock = current_stock + ? WHERE id = ?`,
+        quantity, productId
+      );
+    } else {
+      await database.runAsync(
+        `UPDATE products SET current_stock = current_stock - ? WHERE id = ?`,
+        quantity, productId
+      );
+    }
+    await database.runAsync(
+      `INSERT INTO stock_movements (product_id, type, quantity, reason, transaction_id, user_id)
+       VALUES (?, ?, ?, ?, NULL, ?)`,
+      productId, direction, quantity, reason, userId
+    );
+  });
 }
 // ----- جلب عميل واحد (Get a single customer by id) -----
 export async function getCustomerById(id: number): Promise<Customer | null> {

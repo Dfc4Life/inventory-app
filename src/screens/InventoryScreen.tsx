@@ -1,13 +1,13 @@
 // src/screens/InventoryScreen.tsx
-// المخزون — product list + add product form
+// المخزون — product list + detail modal with restock & movement history
 
 import { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, RefreshControl, Pressable, Modal, TextInput, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, StyleSheet, FlatList, RefreshControl, Pressable, Modal, TextInput, Alert, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { COLORS, SPACING, formatIQD, formatNumber } from '../theme';
-import { getProducts, addProduct } from '../db/database';
-import type { Product } from '../types';
+import { COLORS, SPACING, formatIQD, formatNumber, formatDate } from '../theme';
+import { getProducts, getProductById, getStockMovements, addProduct, adjustStock, getUsers } from '../db/database';
+import type { Product, StockMovement } from '../types';
 
 export default function InventoryScreen() {
   const [products, setProducts] = useState<Product[]>([]);
@@ -20,6 +20,13 @@ export default function InventoryScreen() {
   const [stock, setStock] = useState('');
   const [threshold, setThreshold] = useState('');
   const [saving, setSaving] = useState(false);
+
+  const [showDetail, setShowDetail] = useState(false);
+  const [detail, setDetail] = useState<Product | null>(null);
+  const [movements, setMovements] = useState<StockMovement[]>([]);
+  const [adjAmount, setAdjAmount] = useState('');
+  const [adjReason, setAdjReason] = useState('');
+  const [adjusting, setAdjusting] = useState(false);
 
   const load = useCallback(async () => setProducts(await getProducts()), []);
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -46,6 +53,51 @@ export default function InventoryScreen() {
     }
   };
 
+  const openDetail = async (p: Product) => {
+    setDetail(p);
+    setMovements([]);
+    setAdjAmount('');
+    setAdjReason('');
+    setShowDetail(true);
+    setMovements(await getStockMovements(p.id));
+  };
+
+  const refreshDetail = async () => {
+    if (!detail) return;
+    const updated = await getProductById(detail.id);
+    if (updated) setDetail(updated);
+    setMovements(await getStockMovements(detail.id));
+  };
+
+  const handleAdjust = async (direction: 'in' | 'out') => {
+    if (!detail) return;
+    const qty = parseFloat(adjAmount);
+    if (!qty || qty <= 0) {
+      Alert.alert('تنبيه', 'الرجاء إدخال كمية صحيحة');
+      return;
+    }
+    if (direction === 'out' && qty > (detail.current_stock)) {
+      Alert.alert('تنبيه', 'الكمية المراد خصمها أكبر من المخزون الحالي');
+      return;
+    }
+    setAdjusting(true);
+    try {
+      const users = await getUsers();
+      const userId = users[0]?.id ?? 1;
+      const reason = adjReason.trim() || (direction === 'in' ? 'إعادة تخزين' : 'خصم يدوي');
+      await adjustStock(detail.id, qty, direction, reason, userId);
+      setAdjAmount('');
+      setAdjReason('');
+      await refreshDetail();
+      await load();
+      Alert.alert('✅ تم', direction === 'in' ? 'تمت إضافة الكمية للمخزون' : 'تم خصم الكمية من المخزون');
+    } catch (e) {
+      Alert.alert('خطأ', 'تعذّر التحديث. حاول مرة أخرى.');
+    } finally {
+      setAdjusting(false);
+    }
+  };
+
   const statusBadge = (p: Product) => {
     if (p.current_stock <= 0) return { text: 'نفد', color: COLORS.red };
     if (p.current_stock <= p.low_stock_threshold) return { text: 'منخفض', color: COLORS.amber };
@@ -55,7 +107,7 @@ export default function InventoryScreen() {
   const renderItem = ({ item }: { item: Product }) => {
     const badge = statusBadge(item);
     return (
-      <Pressable style={styles.item}>
+      <Pressable style={styles.item} onPress={() => openDetail(item)}>
         <View style={[styles.avatar, { backgroundColor: COLORS.primary }]}>
           <Text style={styles.avatarText}>{item.name.charAt(0)}</Text>
         </View>
@@ -72,6 +124,8 @@ export default function InventoryScreen() {
       </Pressable>
     );
   };
+
+  const badge = detail ? statusBadge(detail) : null;
 
   return (
     <View style={styles.container}>
@@ -97,6 +151,7 @@ export default function InventoryScreen() {
         ListEmptyComponent={<Text style={styles.empty}>لا توجد منتجات بعد</Text>}
       />
 
+      {/* ADD PRODUCT MODAL */}
       <Modal visible={showAdd} transparent animationType="slide" onRequestClose={closeForm}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -131,6 +186,86 @@ export default function InventoryScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* PRODUCT DETAIL MODAL */}
+      <Modal visible={showDetail} transparent animationType="slide" onRequestClose={() => setShowDetail(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.detailCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{detail?.name}</Text>
+              <Pressable onPress={() => setShowDetail(false)}><Ionicons name="close" size={24} color={COLORS.muted} /></Pressable>
+            </View>
+
+            <ScrollView style={{ maxHeight: '85%' }} contentContainerStyle={{ paddingBottom: 20 }}>
+              <View style={styles.stockCard}>
+                <View style={[styles.stockRing, { backgroundColor: badge?.color ?? COLORS.green }]}>
+                  <Text style={styles.stockNum}>{formatNumber(detail?.current_stock ?? 0)}</Text>
+                  <Text style={styles.stockUnit}>وحدة</Text>
+                </View>
+                <View style={{ flex: 1, marginRight: 10 }}>
+                  <Text style={styles.stockLabel}>المتبقي حالياً</Text>
+                  <Text style={[styles.stockStatus, { color: badge?.color ?? COLORS.green }]}>{badge?.text}</Text>
+                  <Text style={styles.stockMeta}>{detail?.category} • {formatIQD(detail?.unit_price ?? 0)}</Text>
+                  <Text style={styles.stockMeta}>الحد الأدنى: {formatNumber(detail?.low_stock_threshold ?? 0)}</Text>
+                </View>
+              </View>
+
+              <Text style={styles.fieldLabel}>إضافة / خصم مخزون</Text>
+              <TextInput
+                style={styles.input}
+                value={adjAmount}
+                onChangeText={setAdjAmount}
+                placeholder="الكمية"
+                placeholderTextColor={COLORS.muted}
+                keyboardType="numeric"
+              />
+              <TextInput
+                style={[styles.input, { marginTop: 8 }]}
+                value={adjReason}
+                onChangeText={setAdjReason}
+                placeholder="السبب (اختياري) — مثال: استلام بضاعة، تالف"
+                placeholderTextColor={COLORS.muted}
+              />
+              <View style={styles.adjRow}>
+                <Pressable
+                  style={[styles.adjBtn, { backgroundColor: COLORS.green }, adjusting && { opacity: 0.5 }]}
+                  onPress={() => handleAdjust('in')}
+                  disabled={adjusting}
+                >
+                  <Ionicons name="add" size={18} color="#fff" />
+                  <Text style={styles.adjBtnText}>إضافة (تعبئة)</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.adjBtn, { backgroundColor: COLORS.red }, adjusting && { opacity: 0.5 }]}
+                  onPress={() => handleAdjust('out')}
+                  disabled={adjusting}
+                >
+                  <Ionicons name="remove" size={18} color="#fff" />
+                  <Text style={styles.adjBtnText}>خصم (تالف/تصحيح)</Text>
+                </Pressable>
+              </View>
+
+              <Text style={styles.sectionLabel}>سجل الحركات ({movements.length})</Text>
+              {movements.length === 0 ? (
+                <Text style={styles.emptyHint}>لا توجد حركات بعد</Text>
+              ) : (
+                movements.map(m => (
+                  <View key={m.id} style={styles.movementRow}>
+                    <View style={[styles.actDot, { backgroundColor: m.type === 'in' ? COLORS.green : COLORS.red }]} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.movementReason}>{m.reason || (m.type === 'in' ? 'إدخال' : 'إخراج')}</Text>
+                      <Text style={styles.movementDate}>{formatDate(m.created_at)}</Text>
+                    </View>
+                    <Text style={[styles.movementQty, { color: m.type === 'in' ? COLORS.green : COLORS.red }]}>
+                      {m.type === 'in' ? '+' : '−'} {formatNumber(m.quantity)}
+                    </Text>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -154,11 +289,29 @@ const styles = StyleSheet.create({
   empty: { textAlign: 'center', color: COLORS.muted, marginTop: 40 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalCard: { backgroundColor: COLORS.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACING.lg, paddingBottom: 36 },
+  detailCard: { backgroundColor: COLORS.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACING.lg, paddingBottom: 36, maxHeight: '92%' },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
-  modalTitle: { fontSize: 17, fontWeight: '800', color: COLORS.text },
+  modalTitle: { fontSize: 17, fontWeight: '800', color: COLORS.text, flex: 1 },
   fieldLabel: { fontSize: 13, fontWeight: '700', color: COLORS.text, marginBottom: 6, marginTop: 12 },
   input: { borderWidth: 1, borderColor: COLORS.line, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: COLORS.text, backgroundColor: COLORS.background, textAlign: 'left' },
   rowTwo: { flexDirection: 'row' },
   saveBtn: { backgroundColor: COLORS.primary, borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginTop: 22 },
   saveBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  stockCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.background, borderRadius: 16, padding: 16, gap: 14 },
+  stockRing: { width: 76, height: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center' },
+  stockNum: { color: '#fff', fontSize: 22, fontWeight: '800' },
+  stockUnit: { color: 'rgba(255,255,255,0.9)', fontSize: 10 },
+  stockLabel: { fontSize: 13, color: COLORS.muted },
+  stockStatus: { fontSize: 16, fontWeight: '800', marginVertical: 3 },
+  stockMeta: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
+  adjRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  adjBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 12, paddingVertical: 13 },
+  adjBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  sectionLabel: { fontSize: 14, fontWeight: '700', color: COLORS.text, marginVertical: SPACING.sm },
+  emptyHint: { color: COLORS.muted, fontSize: 13, textAlign: 'center', paddingVertical: 14 },
+  movementRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: COLORS.line },
+  actDot: { width: 10, height: 10, borderRadius: 5, marginLeft: 10 },
+  movementReason: { fontSize: 13, fontWeight: '600', color: COLORS.text },
+  movementDate: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
+  movementQty: { fontSize: 14, fontWeight: '800' },
 });
