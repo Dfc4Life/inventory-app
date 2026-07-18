@@ -1,13 +1,16 @@
 // src/screens/ReportsScreen.tsx
-// التقارير — real dashboard with charts and live data
+// التقارير — real dashboard with charts, live data, and backup
 
 import { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, RefreshControl, Pressable, Alert } from 'react-native';
+import * as Sharing from 'expo-sharing';
+import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, formatIQD, formatNumber } from '../theme';
 import {
   getSalesStats, getDailySales, getTopProducts, getDebtSummary,
+  exportDatabase, importDatabase,
 } from '../db/database';
 import type { SalesStats, DaySale, TopProduct, DebtSummary } from '../types';
 
@@ -17,6 +20,7 @@ export default function ReportsScreen() {
   const [top, setTop] = useState<TopProduct[]>([]);
   const [debt, setDebt] = useState<DebtSummary | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [busy, setBusy] = useState<'export' | 'import' | null>(null);
 
   const load = useCallback(async () => {
     const [s, d, t, dbt] = await Promise.all([
@@ -28,22 +32,59 @@ export default function ReportsScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
 
-  const maxDaily = Math.max(1, ...daily.map(d => d.total));
+  const handleExport = async () => {
+    try {
+      setBusy('export');
+      const path = await exportDatabase();
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(path, { mimeType: 'application/octet-stream', dialogTitle: 'حفظ النسخة الاحتياطية' });
+      } else {
+        Alert.alert('✅ تم', 'تم إنشاء النسخة الاحتياطية');
+      }
+    } catch (e) {
+      Alert.alert('خطأ', 'تعذّر التصدير. حاول مرة أخرى.');
+    } finally {
+      setBusy(null);
+    }
+  };
 
+  const handleImport = async () => {
+    Alert.alert(
+      'استعادة نسخة احتياطية',
+      'سيتم استبدال جميع البيانات الحالية بالبيانات من النسخة الاحتياطية. لا يمكن التراجع. متابعة؟',
+      [
+        { text: 'إلغاء', style: 'cancel' },
+        {
+          text: 'استعادة', style: 'destructive', onPress: async () => {
+            try {
+              setBusy('import');
+              const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, type: ['*/*'] });
+              if (result.canceled || !result.assets?.length) { setBusy(null); return; }
+              await importDatabase(result.assets[0].uri);
+              await load();
+              Alert.alert('✅ تم', 'تمت الاستعادة بنجاح. يُفضّل إعادة تشغيل التطبيق للتأكد.');
+            } catch (e) {
+              Alert.alert('خطأ', 'تعذّرت الاستعادة. تأكد من اختيار ملف نسخة احتياطية صحيح.');
+            } finally {
+              setBusy(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const maxDaily = Math.max(1, ...daily.map(d => d.total));
   const dayLabel = (dayStr: string): string => {
     const days = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
     const d = new Date(dayStr + 'T00:00:00');
     if (isNaN(d.getTime())) return '';
     return days[d.getDay()];
   };
-
   const maxTop = Math.max(1, ...top.map(p => p.total_qty));
 
   return (
-    <ScrollView
-      style={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
-    >
+    <ScrollView style={styles.container} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}>
       <View style={styles.header}>
         <Text style={styles.title}>التقارير</Text>
         <Text style={styles.subtitle}>ملخص الأداء — آخر 7 أيام</Text>
@@ -70,15 +111,7 @@ export default function ReportsScreen() {
             return (
               <View key={i} style={styles.barCol}>
                 <View style={styles.barTrack}>
-                  <View
-                    style={[
-                      styles.barFill,
-                      {
-                        height: `${Math.max(heightPct, d.total > 0 ? 6 : 0)}%`,
-                        backgroundColor: i === daily.length - 1 ? COLORS.primary : COLORS.green,
-                      },
-                    ]}
-                  />
+                  <View style={[styles.barFill, { height: `${Math.max(heightPct, d.total > 0 ? 6 : 0)}%`, backgroundColor: i === daily.length - 1 ? COLORS.primary : COLORS.green }]} />
                 </View>
                 <Text style={styles.barLabel} numberOfLines={1}>{dayLabel(d.day)}</Text>
               </View>
@@ -135,6 +168,22 @@ export default function ReportsScreen() {
         <Text style={styles.allTimeValue}>{stats ? formatIQD(stats.allTime) : '—'}</Text>
       </View>
 
+      {/* النسخ الاحتياطي — Backup card */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>💾 النسخ الاحتياطي</Text>
+        <Text style={styles.backupDesc}>صدّر نسخة من بياناتك لحفظها، أو استعدها لاحقاً عند تبديل الجهاز أو إصلاح التطبيق.</Text>
+        <View style={styles.backupRow}>
+          <Pressable style={[styles.backupBtn, { backgroundColor: COLORS.primary }, busy === 'export' && { opacity: 0.5 }]} onPress={handleExport} disabled={busy !== null}>
+            <Ionicons name="download-outline" size={18} color="#fff" />
+            <Text style={styles.backupBtnText}>{busy === 'export' ? 'جارٍ...' : 'تصدير'}</Text>
+          </Pressable>
+          <Pressable style={[styles.backupBtn, { backgroundColor: COLORS.amber }, busy === 'import' && { opacity: 0.5 }]} onPress={handleImport} disabled={busy !== null}>
+            <Ionicons name="cloud-upload-outline" size={18} color="#fff" />
+            <Text style={styles.backupBtnText}>{busy === 'import' ? 'جارٍ...' : 'استيراد'}</Text>
+          </Pressable>
+        </View>
+      </View>
+
       <Text style={styles.footer}>📊 اسحب للأسفل لتحديث البيانات</Text>
     </ScrollView>
   );
@@ -173,5 +222,9 @@ const styles = StyleSheet.create({
   allTimeCard: { backgroundColor: COLORS.primaryDark, margin: SPACING.md, marginBottom: 0, borderRadius: 16, padding: SPACING.lg, alignItems: 'center' },
   allTimeLabel: { color: '#ccfbf1', fontSize: 13, marginTop: 6 },
   allTimeValue: { color: '#fff', fontSize: 24, fontWeight: '800', marginTop: 4 },
+  backupDesc: { fontSize: 12, color: COLORS.muted, lineHeight: 18, marginBottom: SPACING.md },
+  backupRow: { flexDirection: 'row', gap: 10 },
+  backupBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 12, paddingVertical: 13 },
+  backupBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
   footer: { textAlign: 'center', color: COLORS.muted, fontSize: 11, marginTop: SPACING.lg, marginBottom: SPACING.lg },
 });

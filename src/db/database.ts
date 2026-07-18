@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { File, Paths } from 'expo-file-system';
 import type { User, Product, Customer, StockMovement } from '../types';
 
 const DB_NAME = 'inventory.db';
@@ -529,4 +530,39 @@ export async function getDebtSummary(): Promise<DebtSummary> {
     debtorsCount: debt?.c ?? 0,
     weekPayments: weekPay?.s ?? 0,
   };
+}
+// =============================================================
+// النسخ الاحتياطي — Backup (Export / Import)
+// =============================================================
+
+// ----- تصدير نسخة احتياطية (Export database to a shareable file) -----
+// يعيد مسار الملف الجاهز للمشاركة — returns a file URI ready to share
+export async function exportDatabase(): Promise<string> {
+  const database = await getDatabase();
+  await database.execAsync('PRAGMA wal_checkpoint(FULL)');
+  const dbPath = database.databasePath;
+  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  const backupName = `inventory-backup-${ts}.db`;
+  const sourceFile = new File(dbPath);
+  const backupFile = new File(Paths.document, backupName);
+  if (backupFile.exists) backupFile.delete();
+  sourceFile.copy(backupFile);
+  return backupFile.uri;
+}
+
+// ----- استعادة نسخة احتياطية (Import database — overwrites everything) -----
+export async function importDatabase(sourceUri: string): Promise<void> {
+  const database = await getDatabase();
+  const targetPath = database.databasePath;
+  await database.closeAsync();
+  db = null;
+  const sourceFile = new File(sourceUri);
+  const targetFile = new File(targetPath);
+  if (targetFile.exists) targetFile.delete();
+  sourceFile.copy(targetFile);
+  for (const ext of ['-wal', '-shm']) {
+    const f = new File(targetPath + ext);
+    if (f.exists) f.delete();
+  }
+  await getDatabase();
 }

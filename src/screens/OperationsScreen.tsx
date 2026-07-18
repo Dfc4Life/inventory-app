@@ -236,7 +236,7 @@ export default function OperationsScreen() {
         </Pressable>
       </View>
 
-      <Modal visible={showProductModal} transparent animationType="slide">
+      <Modal visible={showProductModal} transparent animationType="slide" onRequestClose={() => setShowProductModal(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
@@ -262,7 +262,7 @@ export default function OperationsScreen() {
         </View>
       </Modal>
 
-      <Modal visible={showCustomerModal} transparent animationType="slide">
+      <Modal visible={showCustomerModal} transparent animationType="slide" onRequestClose={() => setShowCustomerModal(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
