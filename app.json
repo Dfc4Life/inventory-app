@@ -11,7 +11,8 @@
     },
     "android": {
       "package": "com.dfc4life.inventoryapp",
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "androidSoftInputMode": "adjustResize"
     },
     "web": {
       "favicon": "./assets/favicon.png"
