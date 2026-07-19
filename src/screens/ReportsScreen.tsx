@@ -10,7 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, formatIQD, formatNumber } from '../theme';
 import {
   getSalesStats, getDailySales, getTopProducts, getDebtSummary,
-  exportDatabase, importDatabase,
+  exportDatabase, importDatabase, resetAllData,
 } from '../db/database';
 import type { SalesStats, DaySale, TopProduct, DebtSummary } from '../types';
 
@@ -20,7 +20,7 @@ export default function ReportsScreen() {
   const [top, setTop] = useState<TopProduct[]>([]);
   const [debt, setDebt] = useState<DebtSummary | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [busy, setBusy] = useState<'export' | 'import' | null>(null);
+  const [busy, setBusy] = useState<'export' | 'import' | 'reset' | null>(null);
 
   const load = useCallback(async () => {
     const [s, d, t, dbt] = await Promise.all([
@@ -80,7 +80,33 @@ export default function ReportsScreen() {
       ],
     );
   };
-
+    // ----- بدء من جديد (Fresh start — wipe all data) -----
+  const handleReset = () => {
+    Alert.alert(
+      '⚠️ بدء من جديد',
+      'سيتم حذف جميع المنتجات والعملاء والعمليات والديون نهائياً ولا يمكن التراجع.\n\nننصح بعمل نسخة احتياطية أولاً. هل تريد المتابعة؟',
+      [
+        { text: 'إلغاء', style: 'cancel' },
+        {
+          text: 'نعم، احذف كل شيء',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setBusy('reset');
+              await resetAllData();
+              await load();
+              Alert.alert('✅ تم', 'تم حذف جميع البيانات. التطبيق جاهز لبدء جديد.');
+            } catch (e) {
+              Alert.alert('خطأ', 'تعذّر الحذف. حاول مرة أخرى.');
+            } finally {
+              setBusy(null);
+            }
+          },
+        },
+      ],
+    );
+  };
+  
   const maxDaily = Math.max(1, ...daily.map(d => d.total));
   const dayLabel = (dayStr: string): string => {
     const days = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
@@ -192,7 +218,21 @@ export default function ReportsScreen() {
           </Pressable>
         </View>
       </View>
-
+      {/* منطقة الخطر — Danger zone (fresh start) */}
+      <View style={[styles.card, { borderLeftWidth: 3, borderLeftColor: COLORS.red }]}>
+        <Text style={styles.cardTitle}>🗑️ بدء من جديد</Text>
+        <Text style={styles.backupDesc}>
+          يحذف جميع المنتجات والعملاء والعمليات والديون نهائياً لتبدأ بقاعدة بيانات فارغة. استخدمها فقط إذا كنت متأكداً تماماً.
+        </Text>
+        <Pressable
+          style={[styles.resetBtn, busy === 'reset' && { opacity: 0.5 }]}
+          onPress={handleReset}
+          disabled={busy !== null}
+        >
+          <Ionicons name="trash-outline" size={18} color="#fff" />
+          <Text style={styles.backupBtnText}>{busy === 'reset' ? 'جارٍ...' : 'حذف جميع البيانات'}</Text>
+        </Pressable>
+      </View>
       <Text style={styles.footer}>📊 اسحب للأسفل لتحديث البيانات</Text>
     </ScrollView>
   );
@@ -236,4 +276,5 @@ const styles = StyleSheet.create({
   backupBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderRadius: 12, paddingVertical: 13 },
   backupBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
   footer: { textAlign: 'center', color: COLORS.muted, fontSize: 11, marginTop: SPACING.lg, marginBottom: SPACING.lg },
+    resetBtn: { backgroundColor: COLORS.red, borderRadius: 12, paddingVertical: 13, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
 });

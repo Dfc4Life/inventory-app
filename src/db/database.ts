@@ -595,3 +595,26 @@ export async function deleteCustomer(customerId: number): Promise<void> {
     await database.runAsync(`DELETE FROM customers WHERE id = ?`, customerId);
   });
 }
+// ----- حذف منتج (Delete a product) -----
+export async function deleteProduct(productId: number): Promise<void> {
+  const database = await getDatabase();
+  await database.withTransactionAsync(async () => {
+    await database.runAsync(`DELETE FROM stock_movements WHERE product_id = ?`, productId);
+    await database.runAsync(`DELETE FROM transaction_items WHERE product_id = ?`, productId);
+    await database.runAsync(`DELETE FROM products WHERE id = ?`, productId);
+  });
+}
+
+// ----- إعادة ضبط شاملة (Full reset — wipe ALL data for a fresh start) -----
+export async function resetAllData(): Promise<void> {
+  const database = await getDatabase();
+  await database.withTransactionAsync(async () => {
+    await database.runAsync(`DELETE FROM stock_movements;`);
+    await database.runAsync(`DELETE FROM transaction_items;`);
+    await database.runAsync(`DELETE FROM transactions;`);
+    await database.runAsync(`DELETE FROM payments;`);
+    await database.runAsync(`DELETE FROM products;`);
+    await database.runAsync(`DELETE FROM customers;`);
+    await database.runAsync(`DELETE FROM sqlite_sequence WHERE name IN ('products','customers','transactions','transaction_items','stock_movements','payments');`);
+  });
+}

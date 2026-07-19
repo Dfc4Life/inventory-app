@@ -6,7 +6,7 @@ import { View, Text, StyleSheet, FlatList, RefreshControl, Pressable, Modal, Tex
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, formatIQD, formatNumber, formatDate } from '../theme';
-import { getProducts, getProductById, getStockMovements, addProduct, adjustStock, getUsers } from '../db/database';
+import { getProducts, getProductById, getStockMovements, addProduct, adjustStock, getUsers, deleteProduct } from '../db/database';
 import type { Product, StockMovement } from '../types';
 
 export default function InventoryScreen() {
@@ -96,6 +96,33 @@ export default function InventoryScreen() {
     } finally {
       setAdjusting(false);
     }
+  };
+  // حذف المنتج — delete product
+  const handleDelete = () => {
+    if (!detail) return;
+    const hasHistory = movements.length > 0;
+    const msg = hasHistory
+      ? '⚠️ لهذا المنتج سجل حركات.\n\nسيتم حذف المنتج نهائياً بما في ذلك سجل حركاته وعناصر العمليات السابقة المرتبطة به. لا يمكن التراجع. هل أنت متأكد؟'
+      : 'هل أنت متأكد من حذف هذا المنتج؟';
+    Alert.alert(
+      'حذف المنتج',
+      msg,
+      [
+        { text: 'إلغاء', style: 'cancel' },
+        {
+          text: 'حذف', style: 'destructive', onPress: async () => {
+            try {
+              await deleteProduct(detail.id);
+              setShowDetail(false);
+              await load();
+              Alert.alert('✅ تم', 'تم حذف المنتج');
+            } catch (e) {
+              Alert.alert('خطأ', 'تعذّر الحذف. حاول مرة أخرى.');
+            }
+          },
+        },
+      ],
+    );
   };
 
   const statusBadge = (p: Product) => {
@@ -262,6 +289,10 @@ export default function InventoryScreen() {
                   </View>
                 ))
               )}
+                            <Pressable style={styles.deleteBtn} onPress={handleDelete}>
+                <Ionicons name="trash-outline" size={18} color={COLORS.red} />
+                <Text style={styles.deleteBtnText}>حذف المنتج</Text>
+              </Pressable>
             </ScrollView>
           </View>
         </View>
@@ -314,4 +345,6 @@ const styles = StyleSheet.create({
   movementReason: { fontSize: 13, fontWeight: '600', color: COLORS.text },
   movementDate: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
   movementQty: { fontSize: 14, fontWeight: '800' },
+    deleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 20, paddingVertical: 13, borderWidth: 1, borderColor: COLORS.red, borderRadius: 12, backgroundColor: 'rgba(239,68,68,0.06)' },
+  deleteBtnText: { color: COLORS.red, fontWeight: '700', fontSize: 14 },
 });
