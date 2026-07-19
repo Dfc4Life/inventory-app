@@ -32,17 +32,24 @@ export default function ReportsScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
 
-  const handleExport = async () => {
+    // ----- تصدير نسخة احتياطية (Export backup) -----
+  // يفتح منتقي المجلدات ليختار المستخدم مكان الحفظ (تجربة "حفظ باسم")
+      const handleExport = async () => {
     try {
       setBusy('export');
       const path = await exportDatabase();
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(path, { mimeType: 'application/octet-stream', dialogTitle: 'حفظ النسخة الاحتياطية' });
+        await Sharing.shareAsync(path, {
+          mimeType: 'application/octet-stream',
+          dialogTitle: 'احفظ النسخة الاحتياطية في ملفات أو تنزيلات أو Drive',
+        });
       } else {
         Alert.alert('✅ تم', 'تم إنشاء النسخة الاحتياطية');
       }
     } catch (e) {
-      Alert.alert('خطأ في التصدير', e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/cancel/i.test(msg) || /user/i.test(msg)) return;
+      Alert.alert('خطأ في التصدير', msg);
     } finally {
       setBusy(null);
     }
@@ -171,11 +178,13 @@ export default function ReportsScreen() {
       {/* النسخ الاحتياطي — Backup card */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>💾 النسخ الاحتياطي</Text>
-        <Text style={styles.backupDesc}>صدّر نسخة من بياناتك لحفظها، أو استعدها لاحقاً عند تبديل الجهاز أو إصلاح التطبيق.</Text>
+        <Text style={styles.backupDesc}>
+  عند الضغط على "حفظ / مشاركة" ستظهر قائمة — اختر "حفظ في الملفات" أو "التنزيلات" أو Drive لإبقاء الملف على جهازك، أو شاركه مباشرة عبر واتساب/بريد.
+</Text>
         <View style={styles.backupRow}>
           <Pressable style={[styles.backupBtn, { backgroundColor: COLORS.primary }, busy === 'export' && { opacity: 0.5 }]} onPress={handleExport} disabled={busy !== null}>
             <Ionicons name="download-outline" size={18} color="#fff" />
-            <Text style={styles.backupBtnText}>{busy === 'export' ? 'جارٍ...' : 'تصدير'}</Text>
+            <Text style={styles.backupBtnText}>{busy === 'export' ? 'جارٍ...' : 'حفظ / مشاركة'}</Text>
           </Pressable>
           <Pressable style={[styles.backupBtn, { backgroundColor: COLORS.amber }, busy === 'import' && { opacity: 0.5 }]} onPress={handleImport} disabled={busy !== null}>
             <Ionicons name="cloud-upload-outline" size={18} color="#fff" />

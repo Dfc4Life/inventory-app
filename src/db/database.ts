@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import { File, Paths } from 'expo-file-system';
+import { File, Paths, Directory } from 'expo-file-system';
 import type { User, Product, Customer, StockMovement } from '../types';
 
 const DB_NAME = 'inventory.db';
@@ -535,17 +535,27 @@ export async function getDebtSummary(): Promise<DebtSummary> {
 // النسخ الاحتياطي — Backup (Export / Import)
 // =============================================================
 
+// =============================================================
+// النسخ الاحتياطي — Backup (Export / Import)
+// =============================================================
+
+// يحوّل مسار نظام عادي إلى URI مطلق — convert a plain FS path to an absolute file:// URI
+function toFileUri(path: string): string {
+  if (path.startsWith('file://') || path.startsWith('content://')) return path;
+  const normalized = path.replace(/^\/+/, '/');
+  return 'file://' + normalized;
+}
+
 // ----- تصدير نسخة احتياطية (Export database to a shareable file) -----
-// يعيد مسار الملف الجاهز للمشاركة — returns a file URI ready to share
 export async function exportDatabase(): Promise<string> {
   const database = await getDatabase();
   try {
     await database.execAsync('PRAGMA wal_checkpoint(FULL)');
   } catch (e) { /* قد يفشل، ليس قاتلاً */ }
-  const dbPath = database.databasePath;
-  const sourceFile = new File(dbPath);
+  const dbUri = toFileUri(database.databasePath);
+  const sourceFile = new File(dbUri);
   if (!sourceFile.exists) {
-    throw new Error('ملف قاعدة البيانات غير موجود: ' + dbPath);
+    throw new Error('ملف قاعدة البيانات غير موجود: ' + dbUri);
   }
   const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
   const backupName = `inventory-backup-${ts}.db`;
@@ -561,15 +571,15 @@ export async function exportDatabase(): Promise<string> {
 // ----- استعادة نسخة احتياطية (Import database — overwrites everything) -----
 export async function importDatabase(sourceUri: string): Promise<void> {
   const database = await getDatabase();
-  const targetPath = database.databasePath;
+  const targetUri = toFileUri(database.databasePath);
   await database.closeAsync();
   db = null;
-  const sourceFile = new File(sourceUri);
-  const targetFile = new File(targetPath);
+  const sourceFile = new File(toFileUri(sourceUri));
+  const targetFile = new File(targetUri);
   if (targetFile.exists) targetFile.delete();
   sourceFile.copy(targetFile);
   for (const ext of ['-wal', '-shm']) {
-    const f = new File(targetPath + ext);
+    const f = new File(targetUri + ext);
     if (f.exists) f.delete();
   }
   await getDatabase();
