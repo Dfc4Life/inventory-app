@@ -618,3 +618,16 @@ export async function resetAllData(): Promise<void> {
     await database.runAsync(`DELETE FROM sqlite_sequence WHERE name IN ('products','customers','transactions','transaction_items','stock_movements','payments');`);
   });
 }
+// ----- قراءة قاعدة البيانات كـ ArrayBuffer (Get DB as a buffer for cloud upload) -----
+export async function getDatabaseBuffer(): Promise<ArrayBuffer> {
+  const database = await getDatabase();
+  try {
+    await database.execAsync('PRAGMA wal_checkpoint(FULL)');
+  } catch (e) { /* قد يفشل، ليس قاتلاً */ }
+  const dbUri = toFileUri(database.databasePath);
+  const file = new File(dbUri);
+  if (!file.exists) {
+    throw new Error('ملف قاعدة البيانات غير موجود');
+  }
+  return file.arrayBuffer();
+}

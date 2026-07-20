@@ -10,6 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Tabs from './src/navigation/Tabs';
 import ActivationScreen from './src/screens/ActivationScreen';
 import { COLORS } from './src/theme';
+import { syncNow, isSyncConfigured } from './src/sync';
 
 const ACTIVATION_KEY = 'app_activated';
 
@@ -45,6 +46,12 @@ export default function App() {
         <ActivityIndicator size="large" color="#fff" />
       </View>
     );
+      // مزامنة سحابية دورية كل 5 دقائق كشبكة أمان — periodic background sync
+  useEffect(() => {
+    if (!activated || !isSyncConfigured()) return;
+    const interval = setInterval(() => { syncNow(); }, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [activated]);
   }
 
   if (!activated) {

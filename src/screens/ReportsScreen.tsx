@@ -13,8 +13,10 @@ import {
   exportDatabase, importDatabase, resetAllData,
 } from '../db/database';
 import type { SalesStats, DaySale, TopProduct, DebtSummary } from '../types';
+import { isSyncConfigured, getLastSyncAt, syncNowVerbose, getConfigDiagnosis } from '../sync';
 
 export default function ReportsScreen() {
+  const [lastSync, setLastSync] = useState<Date | null>(null);
   const [stats, setStats] = useState<SalesStats | null>(null);
   const [daily, setDaily] = useState<DaySale[]>([]);
   const [top, setTop] = useState<TopProduct[]>([]);
@@ -29,7 +31,7 @@ export default function ReportsScreen() {
     setStats(s); setDaily(d); setTop(t); setDebt(dbt);
   }, []);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  useFocusEffect(useCallback(() => { load(); setLastSync(getLastSyncAt()); }, [load]));
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
 
     // ----- تصدير نسخة احتياطية (Export backup) -----
@@ -106,7 +108,13 @@ export default function ReportsScreen() {
       ],
     );
   };
-  
+     const handleTestSync = async () => {
+    setBusy('reset');
+    const result = await syncNowVerbose();
+    setLastSync(getLastSyncAt());
+    setBusy(null);
+    Alert.alert(result.ok ? '✅ نجح' : '❌ فشل', 'تشخيص:\n' + getConfigDiagnosis() + '\n\nنتيجة المزامنة:\n' + result.message);
+  };
   const maxDaily = Math.max(1, ...daily.map(d => d.total));
   const dayLabel = (dayStr: string): string => {
     const days = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
@@ -233,7 +241,21 @@ export default function ReportsScreen() {
           <Text style={styles.backupBtnText}>{busy === 'reset' ? 'جارٍ...' : 'حذف جميع البيانات'}</Text>
         </Pressable>
       </View>
-      <Text style={styles.footer}>📊 اسحب للأسفل لتحديث البيانات</Text>
+            <Text style={styles.footer}>
+        {isSyncConfigured()
+          ? lastSync
+            ? `☁️ آخر نسخة سحابية: ${lastSync.toLocaleTimeString('en-GB').slice(0,5)} • 📊 اسحب للتحديث`
+            : '☁️ المزامنة السحابية مُفعّلة • 📊 اسحب للتحديث'
+          : '📊 اسحب للأسفل لتحديث البيانات'}
+      </Text>
+                    <Pressable
+          style={[styles.testSyncBtn, busy === 'reset' && { opacity: 0.5 }]}
+          onPress={handleTestSync}
+          disabled={busy !== null}
+        >
+          <Ionicons name="cloud-done-outline" size={18} color={COLORS.primary} />
+          <Text style={styles.testSyncText}>اختبر المزامنة السحابية</Text>
+        </Pressable>
     </ScrollView>
   );
 }
@@ -277,4 +299,6 @@ const styles = StyleSheet.create({
   backupBtnText: { color: '#fff', fontWeight: '800', fontSize: 14 },
   footer: { textAlign: 'center', color: COLORS.muted, fontSize: 11, marginTop: SPACING.lg, marginBottom: SPACING.lg },
     resetBtn: { backgroundColor: COLORS.red, borderRadius: 12, paddingVertical: 13, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
+      testSyncBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 12, paddingVertical: 11, borderWidth: 1, borderColor: COLORS.primary, borderRadius: 12 },
+  testSyncText: { color: COLORS.primary, fontWeight: '700', fontSize: 13 },
 });

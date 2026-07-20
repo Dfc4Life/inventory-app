@@ -41,7 +41,7 @@ export default function CustomersScreen() {
       closeForm();
       Alert.alert('✅ تم', 'تمت إضافة العميل بنجاح');
     } catch (e) {
-      Alert.alert('خطأ', 'تعذّرت الإضافة. حاول مرة أخرى.');
+      Alert.alert('خطأ', 'تعذّرت الإضافة.\n\n' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setSaving(false);
     }

@@ -10,7 +10,7 @@ import {
   recordSale, recordPurchase, recordTransfer,
 } from '../db/database';
 import type { Product, Customer } from '../types';
-
+import { triggerSync } from '../sync';
 type OpType = 'sale' | 'purchase' | 'transfer';
 type CartItem = Product & { qty: number };
 
@@ -100,6 +100,7 @@ export default function OperationsScreen() {
         await recordTransfer(userId, items, reason.trim());
       }
       Alert.alert('✅ تم بنجاح', 'تم حفظ العملية وتحديث المخزون', [{ text: 'حسناً', onPress: reset }]);
+      triggerSync();
     } catch (e) {
       Alert.alert('خطأ', 'حدث خطأ أثناء الحفظ. حاول مرة أخرى.');
     } finally {
