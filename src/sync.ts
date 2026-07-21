@@ -1,5 +1,6 @@
 // src/sync.ts
 // مزامنة سحابية تلقائية — automatic cloud backup to Supabase
+// كل نسخة لها اسم بطابع زمني فريد — لا تُستبدل أبداً
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { getDatabaseBuffer } from './db/database';
@@ -10,7 +11,7 @@ let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSyncAt: Date | null = null;
 let syncing = false;
 
-const REMOTE_FILE = 'latest.db';
+const MAX_BACKUPS = 30; // نحتفظ بآخر 30 نسخة، نحذف الأقدم تلقائياً
 
 function checkConfigured(): boolean {
   const url: string = SUPABASE_URL;
@@ -44,6 +45,23 @@ export function getConfigDiagnosis(): string {
   ].join('\n');
 }
 
+function newBackupName(): string {
+  const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  return `${ts}.db`;
+}
+
+async function pruneOldBackups(supabase: SupabaseClient): Promise<void> {
+  try {
+    const { data, error } = await supabase.storage.from(SUPABASE_BUCKET).list();
+    if (error || !data) return;
+    const dbFiles = data.filter(f => f.name.endsWith('.db')).sort((a, b) => (a.name < b.name ? 1 : -1));
+    const toDelete = dbFiles.slice(MAX_BACKUPS);
+    for (const f of toDelete) {
+      await supabase.storage.from(SUPABASE_BUCKET).remove([f.name]);
+    }
+  } catch (e) {}
+}
+
 export function triggerSync(delayMs = 8000): void {
   if (!checkConfigured()) return;
   if (syncTimer) clearTimeout(syncTimer);
@@ -56,9 +74,11 @@ export async function syncNow(): Promise<boolean> {
   syncing = true;
   try {
     const buffer = await getDatabaseBuffer();
-    const { error } = await supabase.storage.from(SUPABASE_BUCKET).upload(REMOTE_FILE, buffer, { contentType: 'application/octet-stream', upsert: true });
+    const name = newBackupName();
+    const { error } = await supabase.storage.from(SUPABASE_BUCKET).upload(name, buffer, { contentType: 'application/octet-stream' });
     if (error) throw error;
     lastSyncAt = new Date();
+    pruneOldBackups(supabase).catch(() => {});
     return true;
   } catch (e) {
     return false;
@@ -75,13 +95,17 @@ export async function syncNowVerbose(): Promise<{ ok: boolean; message: string }
     return { ok: false, message: getConfigDiagnosis() };
   }
   const supabase = getClient();
-  if (!supabase) return { ok: false, message: 'تعذّر إنشاء اتصال Supabase' };
+  if (!supabase) {
+    return { ok: false, message: 'تعذّر إنشاء اتصال Supabase' };
+  }
   try {
     const buffer = await getDatabaseBuffer();
-    const { error } = await supabase.storage.from(SUPABASE_BUCKET).upload(REMOTE_FILE, buffer, { contentType: 'application/octet-stream', upsert: true });
+    const name = newBackupName();
+    const { error } = await supabase.storage.from(SUPABASE_BUCKET).upload(name, buffer, { contentType: 'application/octet-stream' });
     if (error) throw error;
     lastSyncAt = new Date();
-    return { ok: true, message: 'تم الرفع بنجاح ✓' };
+    pruneOldBackups(supabase).catch(() => {});
+    return { ok: true, message: `تم الرفع بنجاح ✓ (${name})` };
   } catch (e) {
     return { ok: false, message: e instanceof Error ? e.message : String(e) };
   }
