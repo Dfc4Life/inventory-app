@@ -9,11 +9,21 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   if (!db) {
     db = await SQLite.openDatabaseAsync(DB_NAME);
     await initSchema(db);
+    await migrate(db);
     await seedIfEmpty(db);
   }
   return db;
 }
-
+async function migrate(database: SQLite.SQLiteDatabase) {
+  const cols = await database.getAllAsync<{ name: string }>(`PRAGMA table_info(products)`);
+  const names = new Set(cols.map(c => c.name));
+  if (!names.has('bulk_price')) {
+    await database.execAsync(`ALTER TABLE products ADD COLUMN bulk_price REAL NOT NULL DEFAULT 0`);
+  }
+  if (!names.has('bulk_threshold')) {
+    await database.execAsync(`ALTER TABLE products ADD COLUMN bulk_threshold REAL NOT NULL DEFAULT 0`);
+  }
+}
 async function initSchema(database: SQLite.SQLiteDatabase) {
   await database.execAsync(`
     PRAGMA journal_mode = WAL;
@@ -152,7 +162,7 @@ export async function getCustomers(): Promise<Customer[]> {
 
 export async function recordSale(
   userId: number,
-  items: { product_id: number; quantity: number; unit_price: number }[],
+  items: { product_id: number; quantity: number; unit_price: number; stock_units?: number }[],
   paymentMethod: 'cash' | 'credit',
   customerId: number | null,
   note: string = ''
@@ -169,6 +179,7 @@ export async function recordSale(
     const txId = txResult.lastInsertRowId as number;
 
     for (const it of items) {
+      const stockUnits = it.stock_units ?? it.quantity;
       await database.runAsync(
         `INSERT INTO transaction_items (transaction_id, product_id, quantity, unit_price, subtotal)
          VALUES (?, ?, ?, ?, ?)`,
@@ -176,12 +187,12 @@ export async function recordSale(
       );
       await database.runAsync(
         `UPDATE products SET current_stock = current_stock - ? WHERE id = ?`,
-        it.quantity, it.product_id
+        stockUnits, it.product_id
       );
       await database.runAsync(
         `INSERT INTO stock_movements (product_id, type, quantity, reason, transaction_id, user_id)
          VALUES (?, 'out', ?, 'بيع', ?, ?)`,
-        it.product_id, it.quantity, txId, userId
+        it.product_id, stockUnits, txId, userId
       );
     }
 
@@ -384,12 +395,13 @@ export async function getCustomerActivity(customerId: number): Promise<ActivityE
 // ----- إضافة منتج جديد (Add a new product) -----
 export async function addProduct(
   name: string, category: string, unitPrice: number,
-  openingStock: number, lowThreshold: number
+  openingStock: number, lowThreshold: number,
+  bulkPrice: number = 0, bulkThreshold: number = 0
 ): Promise<number> {
   const database = await getDatabase();
   const result = await database.runAsync(
-    `INSERT INTO products (name, category, unit_price, current_stock, low_stock_threshold) VALUES (?, ?, ?, ?, ?)`,
-    name, category, unitPrice, openingStock, lowThreshold
+    `INSERT INTO products (name, category, unit_price, current_stock, low_stock_threshold, bulk_price, bulk_threshold) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    name, category, unitPrice, openingStock, lowThreshold, bulkPrice, bulkThreshold
   );
   return result.lastInsertRowId as number;
 }

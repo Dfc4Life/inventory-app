@@ -41,7 +41,7 @@ export default function ActivationScreen({ onActivated }: { onActivated: () => v
   }, [code]);
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.container}>
+    <KeyboardAvoidingView behavior="padding" style={styles.container}>
       <StatusBar backgroundColor={COLORS.primaryDark} barStyle="light-content" />
 
       <View style={styles.logoWrap}>

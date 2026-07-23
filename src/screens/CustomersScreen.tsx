@@ -159,7 +159,7 @@ export default function CustomersScreen() {
 
       {/* ADD CUSTOMER MODAL */}
       <Modal visible={showAdd} transparent animationType="slide" onRequestClose={closeForm}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior="padding" style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>إضافة عميل جديد</Text>
@@ -193,7 +193,7 @@ export default function CustomersScreen() {
                 </Text>
                 {detail?.phone ? <Text style={styles.debtPhone}>📞 {detail.phone}</Text> : null}
               </View>
-
+              <KeyboardAvoidingView behavior="padding" style={styles.modalOverlay}></KeyboardAvoidingView>
               <Text style={styles.fieldLabel}>تسجيل دفعة سداد</Text>
               <View style={styles.payRow}>
                 <TextInput

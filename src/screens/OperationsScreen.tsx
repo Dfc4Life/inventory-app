@@ -1,5 +1,6 @@
 // src/screens/OperationsScreen.tsx
-// نموذج العملية — The Heartbeat: sale / purchase / transfer
+// نموذج العملية — sale / purchase / transfer
+// يدعم التسعير بالجملة + القطعة الفردية
 
 import { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, Modal, Alert, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
@@ -9,10 +10,11 @@ import {
   getProducts, getCustomers, getUsers,
   recordSale, recordPurchase, recordTransfer,
 } from '../db/database';
-import type { Product, Customer } from '../types';
 import { triggerSync } from '../sync';
+import type { Product, Customer } from '../types';
+
 type OpType = 'sale' | 'purchase' | 'transfer';
-type CartItem = Product & { qty: number };
+type CartItem = Product & { bulkQty: number; individualQty: number };
 
 const OP_META: Record<OpType, { label: string; emoji: string; stockOut: boolean; hasMoney: boolean; subtitle: string }> = {
   sale:     { label: 'بيع',     emoji: '🛒', stockOut: true,  hasMoney: true,  subtitle: 'بيع منتجات للعملاء' },
@@ -34,13 +36,15 @@ export default function OperationsScreen() {
   const [saving, setSaving] = useState(false);
 
   const meta = OP_META[opType];
-  const total = cart.reduce((s, it) => s + it.qty * it.unit_price, 0);
-  const totalUnits = cart.reduce((s, it) => s + it.qty, 0);
+
+  const total = cart.reduce((s, it) => s + it.bulkQty * it.bulk_price + it.individualQty * it.unit_price, 0);
+  const totalUnits = cart.reduce((s, it) => s + it.bulkQty * it.bulk_threshold + it.individualQty, 0);
+  const cartCount = cart.length;
 
   const openProductModal = async () => { setProducts(await getProducts()); setShowProductModal(true); };
   const openCustomerModal = async () => { setCustomers(await getCustomers()); setShowCustomerModal(true); };
 
-  const maxFor = (p: Product) => (meta.stockOut ? p.current_stock : Infinity);
+  const usedPieces = (it: CartItem) => it.bulkQty * it.bulk_threshold + it.individualQty;
 
   const addToCart = (p: Product) => {
     if (meta.stockOut && p.current_stock <= 0) {
@@ -50,21 +54,35 @@ export default function OperationsScreen() {
     setCart(prev => {
       const existing = prev.find(i => i.id === p.id);
       if (existing) {
-        if (existing.qty >= maxFor(p)) return prev;
-        return prev.map(i => (i.id === p.id ? { ...i, qty: i.qty + 1 } : i));
+        if (meta.stockOut && usedPieces(existing) >= p.current_stock) return prev;
+        return prev.map(i => (i.id === p.id ? { ...i, individualQty: i.individualQty + 1 } : i));
       }
-      return [...prev, { ...p, qty: 1 }];
+      return [...prev, { ...p, bulkQty: 0, individualQty: 1 }];
     });
   };
 
-  const changeQty = (item: CartItem, delta: number) => {
+  const changeQty = (item: CartItem, tier: 'bulk' | 'individual', delta: number) => {
     setCart(prev =>
       prev.flatMap(i => {
         if (i.id !== item.id) return [i];
-        const next = i.qty + delta;
-        if (next <= 0) return [];
-        if (next > maxFor(i)) return [i];
-        return [{ ...i, qty: next }];
+        if (tier === 'bulk') {
+          const next = i.bulkQty + delta;
+          if (next < 0) return [i];
+          if (delta > 0 && meta.stockOut) {
+            const totalAfter = next * i.bulk_threshold + i.individualQty;
+            if (totalAfter > i.current_stock) return [i];
+          }
+          return [{ ...i, bulkQty: next }];
+        } else {
+          const next = i.individualQty + delta;
+          if (next < 0) return [i];
+          if (delta > 0 && meta.stockOut) {
+            const totalAfter = i.bulkQty * i.bulk_threshold + next;
+            if (totalAfter > i.current_stock) return [i];
+          }
+          if (next === 0 && i.bulkQty === 0) return [];
+          return [{ ...i, individualQty: next }];
+        }
       })
     );
   };
@@ -74,7 +92,6 @@ export default function OperationsScreen() {
   const switchType = (t: OpType) => {
     setOpType(t); setCart([]); setPayment('cash'); setCustomer(null); setReason('');
   };
-
   const reset = () => { setCart([]); setPayment('cash'); setCustomer(null); setReason(''); };
 
   const handleSave = async () => {
@@ -89,20 +106,37 @@ export default function OperationsScreen() {
     try {
       const users = await getUsers();
       const userId = users[0]?.id ?? 1;
+
       if (opType === 'sale') {
-        const items = cart.map(i => ({ product_id: i.id, quantity: i.qty, unit_price: i.unit_price }));
+        const items: { product_id: number; quantity: number; unit_price: number; stock_units?: number }[] = [];
+        for (const it of cart) {
+          if (it.bulkQty > 0) {
+            items.push({ product_id: it.id, quantity: it.bulkQty, unit_price: it.bulk_price, stock_units: it.bulkQty * it.bulk_threshold });
+          }
+          if (it.individualQty > 0) {
+            items.push({ product_id: it.id, quantity: it.individualQty, unit_price: it.unit_price, stock_units: it.individualQty });
+          }
+        }
         await recordSale(userId, items, payment, customer?.id ?? null);
       } else if (opType === 'purchase') {
-        const items = cart.map(i => ({ product_id: i.id, quantity: i.qty, unit_price: i.unit_price }));
+        const items = cart.flatMap(i => {
+          const arr: { product_id: number; quantity: number; unit_price: number }[] = [];
+          if (i.bulkQty > 0) arr.push({ product_id: i.id, quantity: i.bulkQty * i.bulk_threshold, unit_price: i.bulk_price / i.bulk_threshold });
+          if (i.individualQty > 0) arr.push({ product_id: i.id, quantity: i.individualQty, unit_price: i.unit_price });
+          return arr;
+        });
         await recordPurchase(userId, items);
       } else {
-        const items = cart.map(i => ({ product_id: i.id, quantity: i.qty }));
+        const items = cart.flatMap(i => {
+          const totalQty = i.bulkQty * i.bulk_threshold + i.individualQty;
+          return totalQty > 0 ? [{ product_id: i.id, quantity: totalQty }] : [];
+        });
         await recordTransfer(userId, items, reason.trim());
       }
       Alert.alert('✅ تم بنجاح', 'تم حفظ العملية وتحديث المخزون', [{ text: 'حسناً', onPress: reset }]);
       triggerSync();
-    } catch (e) {
-      Alert.alert('خطأ', 'حدث خطأ أثناء الحفظ. حاول مرة أخرى.');
+        } catch (e) {
+      Alert.alert('خطأ', 'حدث خطأ أثناء الحفظ.\n\n' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setSaving(false);
     }
@@ -115,8 +149,8 @@ export default function OperationsScreen() {
         <Text style={styles.subtitle}>{meta.subtitle}</Text>
       </View>
 
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }} keyboardVerticalOffset={-200}>
-        <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 120 }}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }} keyboardVerticalOffset={-200}>
+        <ScrollView style={styles.body} contentContainerStyle={{ paddingBottom: 120 }} keyboardShouldPersistTaps="handled">
           <Text style={styles.sectionLabel}>نوع العملية</Text>
           <View style={styles.typeRow}>
             {(Object.keys(OP_META) as OpType[]).map(t => {
@@ -130,35 +164,59 @@ export default function OperationsScreen() {
             })}
           </View>
 
-          <Text style={styles.sectionLabel}>المنتجات ({cart.length})</Text>
+          <Text style={styles.sectionLabel}>المنتجات ({cartCount})</Text>
           {cart.length === 0 ? (
             <Text style={styles.emptyHint}>لم تتم إضافة منتجات بعد</Text>
           ) : (
             cart.map(item => {
-              const atMax = meta.stockOut && item.qty >= item.current_stock;
+              const itemTotal = item.bulkQty * item.bulk_price + item.individualQty * item.unit_price;
+              const hasBulk = item.bulk_threshold > 0;
               return (
                 <View key={item.id} style={styles.cartItem}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.cartName}>{item.name}</Text>
-                    <Text style={styles.cartPrice}>
-                      {meta.hasMoney ? formatIQD(item.unit_price) + ' • ' : ''}
-                      {meta.stockOut ? `متوفر: ${formatNumber(item.current_stock)}` : `المخزون الحالي: ${formatNumber(item.current_stock)}`}
-                    </Text>
-                  </View>
-                  <View style={styles.qtyRow}>
-                    <Pressable style={styles.qtyBtn} onPress={() => changeQty(item, -1)}>
-                      <Ionicons name="remove" size={18} color="#fff" />
-                    </Pressable>
-                    <Text style={styles.qtyText}>{item.qty}</Text>
-                    <Pressable style={[styles.qtyBtn, atMax && { opacity: 0.3 }]} onPress={() => changeQty(item, 1)} disabled={atMax}>
-                      <Ionicons name="add" size={18} color="#fff" />
-                    </Pressable>
-                  </View>
-                  <View style={styles.cartRight}>
-                    {meta.hasMoney && <Text style={styles.cartSubtotal}>{formatIQD(item.qty * item.unit_price)}</Text>}
+                  <View style={styles.cartHeader}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.cartName}>{item.name}</Text>
+                      <Text style={styles.cartPrice}>
+                        {meta.stockOut ? `متبقي: ${formatNumber(item.current_stock)}` : `المخزون: ${formatNumber(item.current_stock)}`}
+                      </Text>
+                    </View>
                     <Pressable onPress={() => removeFromCart(item.id)}>
                       <Ionicons name="trash-outline" size={18} color={COLORS.red} />
                     </Pressable>
+                  </View>
+
+                  {/* صف الجملة — bulk row */}
+                  {hasBulk && meta.hasMoney && (
+                    <View style={styles.tierRow}>
+                      <Text style={styles.tierLabel}>📦 كرتون ({formatNumber(item.bulk_threshold)}) • {formatIQD(item.bulk_price)}</Text>
+                      <View style={styles.qtyRow}>
+                        <Pressable style={styles.qtyBtn} onPress={() => changeQty(item, 'bulk', -1)}>
+                          <Ionicons name="remove" size={16} color="#fff" />
+                        </Pressable>
+                        <Text style={styles.qtyText}>{item.bulkQty}</Text>
+                        <Pressable style={styles.qtyBtn} onPress={() => changeQty(item, 'bulk', 1)}>
+                          <Ionicons name="add" size={16} color="#fff" />
+                        </Pressable>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* صف القطعة الفردية — individual row */}
+                  <View style={styles.tierRow}>
+                    <Text style={styles.tierLabel}>قطعة • {formatIQD(item.unit_price)}</Text>
+                    <View style={styles.qtyRow}>
+                      <Pressable style={styles.qtyBtn} onPress={() => changeQty(item, 'individual', -1)}>
+                        <Ionicons name="remove" size={16} color="#fff" />
+                      </Pressable>
+                      <Text style={styles.qtyText}>{item.individualQty}</Text>
+                      <Pressable style={styles.qtyBtn} onPress={() => changeQty(item, 'individual', 1)}>
+                        <Ionicons name="add" size={16} color="#fff" />
+                      </Pressable>
+                    </View>
+                  </View>
+
+                  <View style={styles.cartItemTotalRow}>
+                    <Text style={styles.cartItemTotal}>{formatIQD(itemTotal)}</Text>
                   </View>
                 </View>
               );
@@ -230,13 +288,14 @@ export default function OperationsScreen() {
       <View style={styles.bottomBar}>
         <View>
           <Text style={styles.totalLabel}>{meta.hasMoney ? 'الإجمالي' : 'الكمية'}</Text>
-          <Text style={styles.totalValue}>{meta.hasMoney ? formatIQD(total) : `${cart.length} منتج • ${formatNumber(totalUnits)} وحدة`}</Text>
+          <Text style={styles.totalValue}>{meta.hasMoney ? formatIQD(total) : `${cartCount} منتج • ${formatNumber(totalUnits)} قطعة`}</Text>
         </View>
         <Pressable style={[styles.saveBtn, (saving || cart.length === 0) && { opacity: 0.5 }]} onPress={handleSave} disabled={saving || cart.length === 0}>
           <Text style={styles.saveBtnText}>{saving ? 'جارٍ الحفظ...' : 'حفظ العملية'}</Text>
         </Pressable>
       </View>
 
+      {/* PRODUCT PICKER MODAL */}
       <Modal visible={showProductModal} transparent animationType="slide" onRequestClose={() => setShowProductModal(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -252,7 +311,7 @@ export default function OperationsScreen() {
                     <View style={[styles.avatar, { backgroundColor: COLORS.primary }]}><Text style={styles.avatarText}>{p.name.charAt(0)}</Text></View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.modalItemName}>{p.name}</Text>
-                      <Text style={styles.modalItemSub}>{formatIQD(p.unit_price)}</Text>
+                      <Text style={styles.modalItemSub}>{formatIQD(p.unit_price)}{p.bulk_threshold > 0 ? ` • كرتون ${formatIQD(p.bulk_price)}` : ''}</Text>
                     </View>
                     <Text style={[styles.modalItemStock, { color: p.current_stock <= 0 ? COLORS.red : COLORS.muted }]}>{p.current_stock <= 0 ? 'نفد' : formatNumber(p.current_stock)}</Text>
                   </Pressable>
@@ -263,6 +322,7 @@ export default function OperationsScreen() {
         </View>
       </Modal>
 
+      {/* CUSTOMER PICKER MODAL */}
       <Modal visible={showCustomerModal} transparent animationType="slide" onRequestClose={() => setShowCustomerModal(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -303,14 +363,17 @@ const styles = StyleSheet.create({
   typeActiveText: { color: '#fff', fontWeight: '700' },
   typeInactiveText: { color: COLORS.muted, fontWeight: '600' },
   emptyHint: { color: COLORS.muted, fontSize: 13, textAlign: 'center', paddingVertical: 14 },
-  cartItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: 14, padding: 12, marginBottom: 8 },
+  cartItem: { backgroundColor: COLORS.card, borderRadius: 14, padding: 12, marginBottom: 8 },
+  cartHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   cartName: { fontSize: 14, fontWeight: '700', color: COLORS.text },
   cartPrice: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
-  qtyRow: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 10 },
-  qtyBtn: { width: 28, height: 28, borderRadius: 8, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
-  qtyText: { width: 32, textAlign: 'center', fontSize: 16, fontWeight: '700', color: COLORS.text },
-  cartRight: { alignItems: 'flex-end', minWidth: 70 },
-  cartSubtotal: { fontSize: 13, fontWeight: '800', color: COLORS.text, marginBottom: 6 },
+  tierRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 5, borderTopWidth: 1, borderTopColor: COLORS.line },
+  tierLabel: { fontSize: 12, color: COLORS.text, fontWeight: '600', flex: 1 },
+  qtyRow: { flexDirection: 'row', alignItems: 'center' },
+  qtyBtn: { width: 26, height: 26, borderRadius: 7, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center' },
+  qtyText: { width: 30, textAlign: 'center', fontSize: 15, fontWeight: '700', color: COLORS.text },
+  cartItemTotalRow: { alignItems: 'flex-end', marginTop: 6 },
+  cartItemTotal: { fontSize: 14, fontWeight: '800', color: COLORS.text },
   addBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderStyle: 'dashed', borderColor: COLORS.primary, borderRadius: 14, paddingVertical: 12, marginTop: 4 },
   addBtnText: { color: COLORS.primary, fontWeight: '700', fontSize: 14 },
   payRow: { flexDirection: 'row', gap: 8 },

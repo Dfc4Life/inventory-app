@@ -7,6 +7,7 @@ export interface User {
 export interface Product {
   id: number; name: string; category: string; unit_price: number;
   current_stock: number; low_stock_threshold: number; created_at: string;
+  bulk_price: number; bulk_threshold: number;
 }
 
 export interface Customer {

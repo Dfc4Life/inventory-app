@@ -1,12 +1,14 @@
 // src/screens/InventoryScreen.tsx
 // المخزون — product list + detail modal with restock & movement history
+// يدعم التسعير بالجملة + إصلاح لوحة المفاتيح (نموذج قابل للتمرير)
 
 import { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, RefreshControl, Pressable, Modal, TextInput, Alert, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, formatIQD, formatNumber, formatDate } from '../theme';
-import { getProducts, getProductById, getStockMovements, addProduct, adjustStock, getUsers, deleteProduct } from '../db/database';
+import { getProducts, getProductById, getStockMovements, addProduct, adjustStock, deleteProduct, getUsers } from '../db/database';
+import { triggerSync } from '../sync';
 import type { Product, StockMovement } from '../types';
 
 export default function InventoryScreen() {
@@ -19,6 +21,8 @@ export default function InventoryScreen() {
   const [price, setPrice] = useState('');
   const [stock, setStock] = useState('');
   const [threshold, setThreshold] = useState('');
+  const [bulkPrice, setBulkPrice] = useState('');
+  const [bulkThreshold, setBulkThreshold] = useState('');
   const [saving, setSaving] = useState(false);
 
   const [showDetail, setShowDetail] = useState(false);
@@ -32,7 +36,7 @@ export default function InventoryScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
 
-  const resetForm = () => { setName(''); setCategory(''); setPrice(''); setStock(''); setThreshold(''); };
+  const resetForm = () => { setName(''); setCategory(''); setPrice(''); setStock(''); setThreshold(''); setBulkPrice(''); setBulkThreshold(''); };
   const closeForm = () => { setShowAdd(false); resetForm(); };
 
   const handleAdd = async () => {
@@ -40,14 +44,17 @@ export default function InventoryScreen() {
     const p = parseFloat(price) || 0;
     const s = parseFloat(stock) || 0;
     const t = parseFloat(threshold) || 5;
+    const bp = parseFloat(bulkPrice) || 0;
+    const bt = parseFloat(bulkThreshold) || 0;
     setSaving(true);
     try {
-      await addProduct(name.trim(), category.trim() || 'عام', p, s, t);
+      await addProduct(name.trim(), category.trim() || 'عام', p, s, t, bp, bt);
       await load();
       closeForm();
       Alert.alert('✅ تم', 'تمت إضافة المنتج بنجاح');
+      triggerSync();
     } catch (e) {
-      Alert.alert('خطأ', 'تعذّرت الإضافة. حاول مرة أخرى.');
+      Alert.alert('خطأ', 'تعذّرت الإضافة.\n\n' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setSaving(false);
     }
@@ -72,13 +79,9 @@ export default function InventoryScreen() {
   const handleAdjust = async (direction: 'in' | 'out') => {
     if (!detail) return;
     const qty = parseFloat(adjAmount);
-    if (!qty || qty <= 0) {
-      Alert.alert('تنبيه', 'الرجاء إدخال كمية صحيحة');
-      return;
-    }
+    if (!qty || qty <= 0) { Alert.alert('تنبيه', 'الرجاء إدخال كمية صحيحة'); return; }
     if (direction === 'out' && qty > (detail.current_stock)) {
-      Alert.alert('تنبيه', 'الكمية المراد خصمها أكبر من المخزون الحالي');
-      return;
+      Alert.alert('تنبيه', 'الكمية المراد خصمها أكبر من المخزون الحالي'); return;
     }
     setAdjusting(true);
     try {
@@ -86,43 +89,34 @@ export default function InventoryScreen() {
       const userId = users[0]?.id ?? 1;
       const reason = adjReason.trim() || (direction === 'in' ? 'إعادة تخزين' : 'خصم يدوي');
       await adjustStock(detail.id, qty, direction, reason, userId);
-      setAdjAmount('');
-      setAdjReason('');
-      await refreshDetail();
-      await load();
+      setAdjAmount(''); setAdjReason('');
+      await refreshDetail(); await load();
       Alert.alert('✅ تم', direction === 'in' ? 'تمت إضافة الكمية للمخزون' : 'تم خصم الكمية من المخزون');
+      triggerSync();
     } catch (e) {
       Alert.alert('خطأ', 'تعذّر التحديث. حاول مرة أخرى.');
     } finally {
       setAdjusting(false);
     }
   };
-  // حذف المنتج — delete product
+
   const handleDelete = () => {
     if (!detail) return;
     const hasHistory = movements.length > 0;
     const msg = hasHistory
       ? '⚠️ لهذا المنتج سجل حركات.\n\nسيتم حذف المنتج نهائياً بما في ذلك سجل حركاته وعناصر العمليات السابقة المرتبطة به. لا يمكن التراجع. هل أنت متأكد؟'
       : 'هل أنت متأكد من حذف هذا المنتج؟';
-    Alert.alert(
-      'حذف المنتج',
-      msg,
-      [
-        { text: 'إلغاء', style: 'cancel' },
-        {
-          text: 'حذف', style: 'destructive', onPress: async () => {
-            try {
-              await deleteProduct(detail.id);
-              setShowDetail(false);
-              await load();
-              Alert.alert('✅ تم', 'تم حذف المنتج');
-            } catch (e) {
-              Alert.alert('خطأ', 'تعذّر الحذف. حاول مرة أخرى.');
-            }
-          },
-        },
-      ],
-    );
+    Alert.alert('حذف المنتج', msg, [
+      { text: 'إلغاء', style: 'cancel' },
+      { text: 'حذف', style: 'destructive', onPress: async () => {
+        try {
+          await deleteProduct(detail.id);
+          setShowDetail(false); await load();
+          Alert.alert('✅ تم', 'تم حذف المنتج');
+          triggerSync();
+        } catch (e) { Alert.alert('خطأ', 'تعذّر الحذف. حاول مرة أخرى.'); }
+      }},
+    ]);
   };
 
   const statusBadge = (p: Product) => {
@@ -140,7 +134,10 @@ export default function InventoryScreen() {
         </View>
         <View style={styles.info}>
           <Text style={styles.name}>{item.name}</Text>
-          <Text style={styles.desc}>{formatIQD(item.unit_price)} • {item.category}</Text>
+          <Text style={styles.desc}>
+            {formatIQD(item.unit_price)} • {item.category}
+            {item.bulk_threshold > 0 ? ` • جملة ${item.bulk_threshold}/${formatIQD(item.bulk_price)}` : ''}
+          </Text>
         </View>
         <View style={styles.right}>
           <Text style={[styles.qty, { color: item.current_stock <= 0 ? COLORS.red : COLORS.text }]}>
@@ -178,34 +175,51 @@ export default function InventoryScreen() {
         ListEmptyComponent={<Text style={styles.empty}>لا توجد منتجات بعد</Text>}
       />
 
-      {/* ADD PRODUCT MODAL */}
+      {/* ADD PRODUCT MODAL — قابل للتمرير لإصلاح لوحة المفاتيح */}
       <Modal visible={showAdd} transparent animationType="slide" onRequestClose={closeForm}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior="padding" style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>إضافة منتج جديد</Text>
               <Pressable onPress={closeForm}><Ionicons name="close" size={24} color={COLORS.muted} /></Pressable>
             </View>
+            <ScrollView style={{ maxHeight: '78%' }} contentContainerStyle={{ paddingBottom: 10 }} keyboardShouldPersistTaps="handled">
+              <Text style={styles.fieldLabel}>اسم المنتج</Text>
+              <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="مثال: ماء معدني" placeholderTextColor={COLORS.muted} />
 
-            <Text style={styles.fieldLabel}>اسم المنتج</Text>
-            <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="مثال: زيت الطعام (5 لتر)" placeholderTextColor={COLORS.muted} />
+              <Text style={styles.fieldLabel}>الفئة</Text>
+              <TextInput style={styles.input} value={category} onChangeText={setCategory} placeholder="مثال: مشروبات" placeholderTextColor={COLORS.muted} />
 
-            <Text style={styles.fieldLabel}>الفئة</Text>
-            <TextInput style={styles.input} value={category} onChangeText={setCategory} placeholder="مثال: مواد غذائية" placeholderTextColor={COLORS.muted} />
-
-            <View style={styles.rowTwo}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.fieldLabel}>سعر الوحدة (د.ع)</Text>
-                <TextInput style={styles.input} value={price} onChangeText={setPrice} placeholder="0" placeholderTextColor={COLORS.muted} keyboardType="numeric" />
+              <View style={styles.rowTwo}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.fieldLabel}>سعر القطعة (د.ع)</Text>
+                  <TextInput style={styles.input} value={price} onChangeText={setPrice} placeholder="0" placeholderTextColor={COLORS.muted} keyboardType="numeric" />
+                </View>
+                <View style={{ flex: 1, marginLeft: SPACING.sm }}>
+                  <Text style={styles.fieldLabel}>الكمية الافتتاحية</Text>
+                  <TextInput style={styles.input} value={stock} onChangeText={setStock} placeholder="0" placeholderTextColor={COLORS.muted} keyboardType="numeric" />
+                </View>
               </View>
-              <View style={{ flex: 1, marginLeft: SPACING.sm }}>
-                <Text style={styles.fieldLabel}>الكمية الافتتاحية</Text>
-                <TextInput style={styles.input} value={stock} onChangeText={setStock} placeholder="0" placeholderTextColor={COLORS.muted} keyboardType="numeric" />
-              </View>
-            </View>
 
-            <Text style={styles.fieldLabel}>الحد الأدنى للتنبيه</Text>
-            <TextInput style={styles.input} value={threshold} onChangeText={setThreshold} placeholder="5" placeholderTextColor={COLORS.muted} keyboardType="numeric" />
+              <Text style={styles.fieldLabel}>الحد الأدنى للتنبيه</Text>
+              <TextInput style={styles.input} value={threshold} onChangeText={setThreshold} placeholder="5" placeholderTextColor={COLORS.muted} keyboardType="numeric" />
+
+              {/* قسم الجملة — اختياري */}
+              <View style={styles.bulkSection}>
+                <Text style={styles.bulkTitle}>📦 التسعير بالجملة (اختياري)</Text>
+                <Text style={styles.bulkHint}>مثال: الكرتون فيه 12 قطعة، سعر القطعة 250، سعر الكرتون 1000</Text>
+                <View style={styles.rowTwo}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>عدد القطع بالكرتون</Text>
+                    <TextInput style={styles.input} value={bulkThreshold} onChangeText={setBulkThreshold} placeholder="0" placeholderTextColor={COLORS.muted} keyboardType="numeric" />
+                  </View>
+                  <View style={{ flex: 1, marginLeft: SPACING.sm }}>
+                    <Text style={styles.fieldLabel}>سعر الكرتون (د.ع)</Text>
+                    <TextInput style={styles.input} value={bulkPrice} onChangeText={setBulkPrice} placeholder="0" placeholderTextColor={COLORS.muted} keyboardType="numeric" />
+                  </View>
+                </View>
+              </View>
+            </ScrollView>
 
             <Pressable style={[styles.saveBtn, saving && { opacity: 0.5 }]} onPress={handleAdd} disabled={saving}>
               <Text style={styles.saveBtnText}>{saving ? 'جارٍ الحفظ...' : 'حفظ المنتج'}</Text>
@@ -227,46 +241,28 @@ export default function InventoryScreen() {
               <View style={styles.stockCard}>
                 <View style={[styles.stockRing, { backgroundColor: badge?.color ?? COLORS.green }]}>
                   <Text style={styles.stockNum}>{formatNumber(detail?.current_stock ?? 0)}</Text>
-                  <Text style={styles.stockUnit}>وحدة</Text>
+                  <Text style={styles.stockUnit}>قطعة</Text>
                 </View>
                 <View style={{ flex: 1, marginRight: 10 }}>
                   <Text style={styles.stockLabel}>المتبقي حالياً</Text>
                   <Text style={[styles.stockStatus, { color: badge?.color ?? COLORS.green }]}>{badge?.text}</Text>
-                  <Text style={styles.stockMeta}>{detail?.category} • {formatIQD(detail?.unit_price ?? 0)}</Text>
+                  <Text style={styles.stockMeta}>{detail?.category} • القطعة: {formatIQD(detail?.unit_price ?? 0)}</Text>
+                  {detail && detail.bulk_threshold > 0 ? (
+                    <Text style={styles.stockMeta}>جملة: {formatNumber(detail.bulk_threshold)} قطعة / {formatIQD(detail.bulk_price)}</Text>
+                  ) : null}
                   <Text style={styles.stockMeta}>الحد الأدنى: {formatNumber(detail?.low_stock_threshold ?? 0)}</Text>
                 </View>
               </View>
 
               <Text style={styles.fieldLabel}>إضافة / خصم مخزون</Text>
-              <TextInput
-                style={styles.input}
-                value={adjAmount}
-                onChangeText={setAdjAmount}
-                placeholder="الكمية"
-                placeholderTextColor={COLORS.muted}
-                keyboardType="numeric"
-              />
-              <TextInput
-                style={[styles.input, { marginTop: 8 }]}
-                value={adjReason}
-                onChangeText={setAdjReason}
-                placeholder="السبب (اختياري) — مثال: استلام بضاعة، تالف"
-                placeholderTextColor={COLORS.muted}
-              />
+              <TextInput style={styles.input} value={adjAmount} onChangeText={setAdjAmount} placeholder="الكمية" placeholderTextColor={COLORS.muted} keyboardType="numeric" />
+              <TextInput style={[styles.input, { marginTop: 8 }]} value={adjReason} onChangeText={setAdjReason} placeholder="السبب (اختياري)" placeholderTextColor={COLORS.muted} />
               <View style={styles.adjRow}>
-                <Pressable
-                  style={[styles.adjBtn, { backgroundColor: COLORS.green }, adjusting && { opacity: 0.5 }]}
-                  onPress={() => handleAdjust('in')}
-                  disabled={adjusting}
-                >
+                <Pressable style={[styles.adjBtn, { backgroundColor: COLORS.green }, adjusting && { opacity: 0.5 }]} onPress={() => handleAdjust('in')} disabled={adjusting}>
                   <Ionicons name="add" size={18} color="#fff" />
                   <Text style={styles.adjBtnText}>إضافة (تعبئة)</Text>
                 </Pressable>
-                <Pressable
-                  style={[styles.adjBtn, { backgroundColor: COLORS.red }, adjusting && { opacity: 0.5 }]}
-                  onPress={() => handleAdjust('out')}
-                  disabled={adjusting}
-                >
+                <Pressable style={[styles.adjBtn, { backgroundColor: COLORS.red }, adjusting && { opacity: 0.5 }]} onPress={() => handleAdjust('out')} disabled={adjusting}>
                   <Ionicons name="remove" size={18} color="#fff" />
                   <Text style={styles.adjBtnText}>خصم (تالف/تصحيح)</Text>
                 </Pressable>
@@ -289,7 +285,8 @@ export default function InventoryScreen() {
                   </View>
                 ))
               )}
-                            <Pressable style={styles.deleteBtn} onPress={handleDelete}>
+
+              <Pressable style={styles.deleteBtn} onPress={handleDelete}>
                 <Ionicons name="trash-outline" size={18} color={COLORS.red} />
                 <Text style={styles.deleteBtnText}>حذف المنتج</Text>
               </Pressable>
@@ -313,21 +310,24 @@ const styles = StyleSheet.create({
   avatarText: { color: '#fff', fontWeight: '800', fontSize: 17 },
   info: { flex: 1, marginHorizontal: 12 },
   name: { fontSize: 15, fontWeight: '700', color: COLORS.text },
-  desc: { fontSize: 12, color: COLORS.muted, marginTop: 2 },
+  desc: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
   right: { alignItems: 'flex-end' },
   qty: { fontSize: 18, fontWeight: '800' },
   badge: { fontSize: 11, fontWeight: '700', marginTop: 2 },
   empty: { textAlign: 'center', color: COLORS.muted, marginTop: 40 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  modalCard: { backgroundColor: COLORS.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACING.lg, paddingBottom: 36 },
+  modalCard: { backgroundColor: COLORS.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACING.lg, paddingBottom: 36, maxHeight: '92%' },
   detailCard: { backgroundColor: COLORS.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: SPACING.lg, paddingBottom: 36, maxHeight: '92%' },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
   modalTitle: { fontSize: 17, fontWeight: '800', color: COLORS.text, flex: 1 },
   fieldLabel: { fontSize: 13, fontWeight: '700', color: COLORS.text, marginBottom: 6, marginTop: 12 },
-  input: { borderWidth: 1, borderColor: COLORS.line, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: COLORS.text, backgroundColor: COLORS.background, textAlign: 'left' },
+  input: { borderWidth: 1, borderColor: COLORS.line, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: COLORS.text, backgroundColor: COLORS.background, textAlign: 'right' },
   rowTwo: { flexDirection: 'row' },
   saveBtn: { backgroundColor: COLORS.primary, borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginTop: 22 },
   saveBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
+  bulkSection: { marginTop: 18, padding: 14, backgroundColor: COLORS.background, borderRadius: 14 },
+  bulkTitle: { fontSize: 14, fontWeight: '800', color: COLORS.primary, marginBottom: 4 },
+  bulkHint: { fontSize: 11, color: COLORS.muted, marginBottom: 4, lineHeight: 16 },
   stockCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.background, borderRadius: 16, padding: 16, gap: 14 },
   stockRing: { width: 76, height: 76, borderRadius: 38, alignItems: 'center', justifyContent: 'center' },
   stockNum: { color: '#fff', fontSize: 22, fontWeight: '800' },
@@ -345,6 +345,6 @@ const styles = StyleSheet.create({
   movementReason: { fontSize: 13, fontWeight: '600', color: COLORS.text },
   movementDate: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
   movementQty: { fontSize: 14, fontWeight: '800' },
-    deleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 20, paddingVertical: 13, borderWidth: 1, borderColor: COLORS.red, borderRadius: 12, backgroundColor: 'rgba(239,68,68,0.06)' },
+  deleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 20, paddingVertical: 13, borderWidth: 1, borderColor: COLORS.red, borderRadius: 12, backgroundColor: 'rgba(239,68,68,0.06)' },
   deleteBtnText: { color: COLORS.red, fontWeight: '700', fontSize: 14 },
 });
